@@ -1,0 +1,89 @@
+{
+  "name": "sacpromi-backend",
+  "version": "0.1.0",
+  "description": "Backend SACPROMI - Gestion intégrée (aliments animaux + élevage poulets)",
+  "private": true,
+  "license": "UNLICENSED",
+  "scripts": {
+    "build": "nest build",
+    "start": "nest start",
+    "start:dev": "nest start --watch",
+    "start:debug": "nest start --debug --watch",
+    "start:prod": "node dist/src/main",
+    "release": "prisma migrate deploy && node dist/src/main",
+    "postinstall": "prisma generate",
+    "lint": "eslint \"{src,test}/**/*.ts\" --fix",
+    "format": "prettier --write \"src/**/*.ts\" \"test/**/*.ts\"",
+    "prisma:generate": "prisma generate",
+    "prisma:migrate": "prisma migrate dev",
+    "prisma:reset": "prisma migrate reset",
+    "prisma:studio": "prisma studio",
+    "seed": "ts-node prisma/seed.ts",
+    "test": "jest",
+    "test:watch": "jest --watch",
+    "test:cov": "jest --coverage",
+    "backup": "bash scripts/backup-db.sh"
+  },
+  "jest": {
+    "moduleFileExtensions": [
+      "js",
+      "json",
+      "ts"
+    ],
+    "rootDir": "src",
+    "testRegex": ".*\\.spec\\.ts$",
+    "transform": {
+      "^.+\\.(t|j)s$": "ts-jest"
+    },
+    "collectCoverageFrom": [
+      "**/*.(t|j)s"
+    ],
+    "coverageDirectory": "../coverage",
+    "testEnvironment": "node"
+  },
+  "dependencies": {
+    "@nestjs/common": "^11.0.0",
+    "@nestjs/config": "^4.0.0",
+    "@nestjs/core": "^11.0.0",
+    "@nestjs/jwt": "^11.0.0",
+    "@nestjs/passport": "^11.0.0",
+    "@nestjs/platform-express": "^11.0.0",
+    "@nestjs/schedule": "^6.0.0",
+    "@nestjs/swagger": "^11.0.0",
+    "@nestjs/throttler": "^6.5.0",
+    "@prisma/client": "^6.5.0",
+    "@types/nodemailer": "^8.0.0",
+    "@types/pdfkit": "^0.17.6",
+    "bcrypt": "^6.0.0",
+    "class-transformer": "^0.5.1",
+    "class-validator": "^0.14.1",
+    "helmet": "^8.1.0",
+    "nodemailer": "^8.0.7",
+    "passport": "^0.7.0",
+    "passport-jwt": "^4.0.1",
+    "pdfkit": "^0.18.0",
+    "reflect-metadata": "^0.2.2",
+    "rxjs": "^7.8.1"
+  },
+  "devDependencies": {
+    "@nestjs/cli": "^11.0.0",
+    "@nestjs/schematics": "^11.0.0",
+    "@nestjs/testing": "^11.0.0",
+    "@types/bcrypt": "^5.0.2",
+    "@types/express": "^5.0.0",
+    "@types/jest": "^30.0.0",
+    "@types/node": "^22.10.0",
+    "@types/passport-jwt": "^4.0.1",
+    "jest": "^30.3.0",
+    "prisma": "^6.5.0",
+    "source-map-support": "^0.5.21",
+    "ts-jest": "^29.4.9",
+    "ts-loader": "^9.5.1",
+    "ts-node": "^10.9.2",
+    "tsconfig-paths": "^4.2.0",
+    "typescript": "^5.7.0"
+  },
+  "prisma": {
+    "seed": "ts-node prisma/seed.ts"
+  }
+}

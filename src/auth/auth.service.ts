@@ -1,0 +1,271 @@
+import {
+  BadRequestException,
+  ConflictException,
+  Injectable,
+  Logger,
+  UnauthorizedException,
+} from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
+import { JwtService } from '@nestjs/jwt';
+import { User, UserRole } from '@prisma/client';
+import * as bcrypt from 'bcrypt';
+import * as crypto from 'crypto';
+import { PrismaService } from '../prisma/prisma.service';
+import { MailService } from '../mail/mail.service';
+import { RegisterDto } from './dto/register.dto';
+import { LoginDto } from './dto/login.dto';
+import { RefreshTokenDto } from './dto/refresh-token.dto';
+import { ChangePasswordDto } from './dto/change-password.dto';
+import { ForgotPasswordDto } from './dto/forgot-password.dto';
+import { ResetPasswordDto } from './dto/reset-password.dto';
+import { JwtPayload } from './strategies/jwt.strategy';
+
+const RESET_TOKEN_TTL_MINUTES = 30;
+
+export type SafeUser = Omit<User, 'password'>;
+
+export interface AuthTokens {
+  accessToken: string;
+  refreshToken: string;
+}
+
+export interface AuthResponse {
+  user: SafeUser;
+  tokens: AuthTokens;
+}
+
+@Injectable()
+export class AuthService {
+  private readonly logger = new Logger(AuthService.name);
+  private readonly saltRounds: number;
+
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly jwt: JwtService,
+    private readonly config: ConfigService,
+    private readonly mail: MailService,
+  ) {
+    this.saltRounds = parseInt(this.config.get<string>('BCRYPT_SALT_ROUNDS', '12'), 10);
+  }
+
+  private stripPassword(user: User): SafeUser {
+    const { password: _password, ...rest } = user;
+    return rest;
+  }
+
+  private async generateTokens(user: Pick<User, 'id' | 'email' | 'role'>): Promise<AuthTokens> {
+    const payload: JwtPayload = { sub: user.id, email: user.email, role: user.role };
+
+    const accessOptions = {
+      secret: this.config.get<string>('JWT_ACCESS_SECRET'),
+      expiresIn: this.config.get<string>('JWT_ACCESS_EXPIRATION', '24h'),
+    } as { secret: string; expiresIn: string };
+
+    const refreshOptions = {
+      secret: this.config.get<string>('JWT_REFRESH_SECRET'),
+      expiresIn: this.config.get<string>('JWT_REFRESH_EXPIRATION', '7d'),
+    } as { secret: string; expiresIn: string };
+
+    const accessToken = await this.jwt.signAsync({ ...payload }, accessOptions as never);
+    const refreshToken = await this.jwt.signAsync({ ...payload }, refreshOptions as never);
+
+    return { accessToken, refreshToken };
+  }
+
+  async register(dto: RegisterDto): Promise<AuthResponse> {
+    const existing = await this.prisma.user.findUnique({ where: { email: dto.email } });
+    if (existing) {
+      throw new ConflictException('Cet email est déjà utilisé');
+    }
+
+    const userCount = await this.prisma.user.count();
+    const role: UserRole = userCount === 0 ? UserRole.DIRECTOR : UserRole.OPERATOR;
+
+    const hashedPassword = await bcrypt.hash(dto.password, this.saltRounds);
+
+    const user = await this.prisma.user.create({
+      data: {
+        email: dto.email,
+        password: hashedPassword,
+        fullName: dto.fullName,
+        phone: dto.phone,
+        role,
+      },
+    });
+
+    // Email de bienvenue (sans mot de passe — l'utilisateur l'a choisi lui-même)
+    void this.sendWelcomeEmailSafely({
+      to: user.email,
+      fullName: user.fullName,
+      role: user.role,
+    });
+
+    const tokens = await this.generateTokens(user);
+    return { user: this.stripPassword(user), tokens };
+  }
+
+  /** Envoie un email de bienvenue sans bloquer en cas d'échec SMTP. */
+  private async sendWelcomeEmailSafely(opts: {
+    to: string;
+    fullName: string;
+    role: string;
+    tempPassword?: string;
+  }) {
+    try {
+      const appUrl = this.config.get<string>('APP_URL', 'http://localhost:3071');
+      await this.mail.sendWelcome({
+        ...opts,
+        loginUrl: `${appUrl}/login`,
+      });
+    } catch (err) {
+      this.logger.warn(
+        `Échec envoi email de bienvenue à ${opts.to} : ${(err as Error).message}`,
+      );
+    }
+  }
+
+  async login(dto: LoginDto): Promise<AuthResponse> {
+    const user = await this.prisma.user.findUnique({ where: { email: dto.email } });
+    if (!user) {
+      throw new UnauthorizedException('Identifiants invalides');
+    }
+
+    if (!user.isActive) {
+      throw new UnauthorizedException('Compte désactivé. Contactez votre administrateur.');
+    }
+
+    const passwordMatch = await bcrypt.compare(dto.password, user.password);
+    if (!passwordMatch) {
+      throw new UnauthorizedException('Identifiants invalides');
+    }
+
+    const tokens = await this.generateTokens(user);
+    return { user: this.stripPassword(user), tokens };
+  }
+
+  async refresh(dto: RefreshTokenDto): Promise<AuthTokens> {
+    let payload: JwtPayload;
+    try {
+      payload = await this.jwt.verifyAsync<JwtPayload>(dto.refreshToken, {
+        secret: this.config.get<string>('JWT_REFRESH_SECRET'),
+      });
+    } catch {
+      throw new UnauthorizedException('Refresh token invalide ou expiré');
+    }
+
+    const user = await this.prisma.user.findUnique({ where: { id: payload.sub } });
+    if (!user || !user.isActive) {
+      throw new UnauthorizedException('Compte inactif ou inexistant');
+    }
+
+    return this.generateTokens(user);
+  }
+
+  async getProfile(userId: string): Promise<SafeUser> {
+    const user = await this.prisma.user.findUnique({ where: { id: userId } });
+    if (!user) {
+      throw new UnauthorizedException('Utilisateur introuvable');
+    }
+    return this.stripPassword(user);
+  }
+
+  async changePassword(userId: string, dto: ChangePasswordDto): Promise<{ message: string }> {
+    const user = await this.prisma.user.findUnique({ where: { id: userId } });
+    if (!user) {
+      throw new UnauthorizedException('Utilisateur introuvable');
+    }
+
+    const ok = await bcrypt.compare(dto.currentPassword, user.password);
+    if (!ok) {
+      throw new BadRequestException('Mot de passe actuel incorrect');
+    }
+
+    const newHash = await bcrypt.hash(dto.newPassword, this.saltRounds);
+    await this.prisma.user.update({ where: { id: userId }, data: { password: newHash } });
+
+    return { message: 'Mot de passe modifié avec succès' };
+  }
+
+  /**
+   * Génère un token, le stocke hashé, envoie l'email avec le lien de reset.
+   * Renvoie toujours un message générique pour ne pas révéler si l'email existe (sécurité).
+   */
+  async forgotPassword(dto: ForgotPasswordDto): Promise<{ message: string }> {
+    const genericMessage = {
+      message:
+        "Si un compte existe pour cet email, un lien de réinitialisation vous a été envoyé.",
+    };
+
+    const user = await this.prisma.user.findUnique({ where: { email: dto.email } });
+    if (!user || !user.isActive) {
+      return genericMessage;
+    }
+
+    // Token brut (URL-safe), hash sha256 stocké en BDD
+    const rawToken = crypto.randomBytes(32).toString('base64url');
+    const tokenHash = crypto.createHash('sha256').update(rawToken).digest('hex');
+    const expiresAt = new Date(Date.now() + RESET_TOKEN_TTL_MINUTES * 60_000);
+
+    // Invalider les anciens tokens non utilisés
+    await this.prisma.passwordResetToken.updateMany({
+      where: { userId: user.id, usedAt: null, expiresAt: { gt: new Date() } },
+      data: { usedAt: new Date() },
+    });
+
+    await this.prisma.passwordResetToken.create({
+      data: { tokenHash, userId: user.id, expiresAt },
+    });
+
+    const appUrl = this.config.get<string>('APP_URL', 'http://localhost:3071');
+    const resetUrl = `${appUrl}/reset-password/${rawToken}`;
+
+    try {
+      await this.mail.sendPasswordReset({
+        to: user.email,
+        fullName: user.fullName,
+        resetUrl,
+        expiresInMinutes: RESET_TOKEN_TTL_MINUTES,
+      });
+    } catch (err) {
+      this.logger.error(
+        `Échec envoi email reset à ${user.email}`,
+        (err as Error).stack,
+      );
+      // En dev (jsonTransport ou erreur SMTP), on log le lien pour debug
+      this.logger.warn(`🔗 Lien de réinitialisation (debug) : ${resetUrl}`);
+    }
+
+    return genericMessage;
+  }
+
+  async resetPassword(dto: ResetPasswordDto): Promise<{ message: string }> {
+    const tokenHash = crypto.createHash('sha256').update(dto.token).digest('hex');
+    const record = await this.prisma.passwordResetToken.findUnique({
+      where: { tokenHash },
+      include: { user: true },
+    });
+
+    if (!record || record.usedAt || record.expiresAt < new Date()) {
+      throw new BadRequestException('Lien de réinitialisation invalide ou expiré');
+    }
+
+    if (!record.user.isActive) {
+      throw new BadRequestException('Ce compte est désactivé');
+    }
+
+    const newHash = await bcrypt.hash(dto.newPassword, this.saltRounds);
+
+    await this.prisma.$transaction([
+      this.prisma.user.update({
+        where: { id: record.userId },
+        data: { password: newHash },
+      }),
+      this.prisma.passwordResetToken.update({
+        where: { id: record.id },
+        data: { usedAt: new Date() },
+      }),
+    ]);
+
+    return { message: 'Mot de passe réinitialisé avec succès. Vous pouvez vous connecter.' };
+  }
+}

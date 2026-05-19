@@ -1,0 +1,1352 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// =====================================================
+// ENUMS
+// =====================================================
+
+enum UserRole {
+  DIRECTOR
+  PRODUCTION_MANAGER
+  BREEDING_MANAGER
+  SALES_MANAGER
+  OPERATOR
+}
+
+enum PurchaseOrderStatus {
+  DRAFT
+  VALIDATED
+  PARTIALLY_DELIVERED
+  DELIVERED
+  CLOSED
+  CANCELLED
+}
+
+enum PaymentStatus {
+  UNPAID
+  PARTIALLY_PAID
+  PAID
+}
+
+enum PaymentMethod {
+  CASH
+  TRANSFER
+  CHECK
+  WAVE
+  ORANGE_MONEY
+  OTHER
+}
+
+enum RawMaterialCategory {
+  CEREALS
+  PROTEINS
+  PREMIX_MINERALS
+  OTHER
+}
+
+enum MeasurementUnit {
+  KG
+  TONNE
+  LITER
+  BAG
+  PIECE
+}
+
+enum LotStatus {
+  ACTIVE
+  DEPLETED
+  EXPIRED
+}
+
+enum RawStockMovementType {
+  ENTRY_PURCHASE
+  EXIT_PRODUCTION
+  EXIT_BREEDING
+  LOSS
+  ADJUSTMENT
+}
+
+enum InventoryType {
+  RAW_MATERIAL
+  FINISHED_PRODUCT
+}
+
+enum InventoryStatus {
+  IN_PROGRESS
+  VALIDATED
+}
+
+enum StockReferenceType {
+  PURCHASE_INVOICE
+  PRODUCTION_ORDER
+  BREEDING_BATCH
+  INVENTORY
+  MANUAL
+  SALE_INVOICE
+}
+
+enum FinishedProductCategory {
+  POULTRY_FEED
+  CATTLE_FEED
+  LIVE_CHICKEN
+  SLAUGHTERED_CHICKEN
+  OTHER
+}
+
+enum FinishedProductUnit {
+  KG
+  TONNE
+  BAG_25KG
+  BAG_50KG
+  HEAD
+  PIECE
+}
+
+enum ProductionOrderStatus {
+  PLANNED
+  IN_PROGRESS
+  COMPLETED
+  CANCELLED
+}
+
+enum FinishedLotSource {
+  PRODUCTION
+  BREEDING
+}
+
+enum FinishedStockMovementType {
+  ENTRY_PRODUCTION
+  ENTRY_BREEDING
+  EXIT_SALE
+  EXIT_BREEDING_FEED
+  LOSS
+  ADJUSTMENT
+}
+
+enum BreedingBatchStatus {
+  ACTIVE
+  CLOSED
+}
+
+enum CustomerType {
+  BREEDER
+  RESELLER
+  INDIVIDUAL
+  OTHER
+}
+
+enum CustomerPriceCategory {
+  WHOLESALE
+  RETAIL
+}
+
+enum CustomerOrderStatus {
+  PENDING
+  CONFIRMED
+  PARTIALLY_DELIVERED
+  DELIVERED
+  CLOSED
+  CANCELLED
+}
+
+enum SaleInvoiceType {
+  INVOICE
+  RECEIPT
+}
+
+enum SalePaymentMethod {
+  CASH
+  WAVE
+  ORANGE_MONEY
+  TRANSFER
+  CHECK
+  CREDIT
+}
+
+enum ExpenseActivity {
+  PRODUCTION
+  BREEDING
+  COMMERCIAL
+  GENERAL
+}
+
+enum ExpenseStatus {
+  CONFIRMED
+  PENDING_CONFIRMATION
+}
+
+// ----- Sprint 7 — Finance & Trésorerie -----
+
+enum AccountType {
+  CASH
+  BANK
+  MOBILE_MONEY
+  E_WALLET
+}
+
+enum TreasuryEntrySource {
+  OPENING_BALANCE
+  SUPPLIER_PAYMENT
+  CUSTOMER_PAYMENT
+  EXPENSE
+  LOAN_DISBURSEMENT
+  LOAN_PAYMENT
+  ACCOUNT_TRANSFER
+  CAPITAL_MOVEMENT
+  MANUAL_ADJUSTMENT
+  FIXED_ASSET_ACQUISITION
+}
+
+enum LoanStatus {
+  ACTIVE
+  CLOSED
+  DEFAULTED
+}
+
+enum LoanScheduleItemStatus {
+  PENDING
+  PARTIALLY_PAID
+  PAID
+  OVERDUE
+}
+
+enum FixedAssetCategory {
+  VEHICLE
+  EQUIPMENT
+  BUILDING
+  LAND
+  IT_HARDWARE
+  FURNITURE
+  OTHER
+}
+
+enum FixedAssetStatus {
+  IN_SERVICE
+  SOLD
+  SCRAPPED
+  WRITTEN_OFF
+}
+
+enum DepreciationMethod {
+  STRAIGHT_LINE
+  DECLINING_BALANCE
+}
+
+enum CapitalMovementType {
+  CONTRIBUTION // apport en capital (associé)
+  WITHDRAWAL // retrait associé
+  SUBSIDY // subvention publique
+  GRANT // don / aide non remboursable
+  DIVIDEND // distribution résultat
+}
+
+// =====================================================
+// USER
+// =====================================================
+
+model User {
+  id        String   @id @default(uuid())
+  email     String   @unique
+  password  String
+  fullName  String
+  phone     String?
+  role      UserRole
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  purchaseOrdersCreated    PurchaseOrder[]
+  purchaseInvoicesCreated  PurchaseInvoice[]
+  supplierPaymentsCreated  SupplierPayment[]
+  stockMovementsCreated    RawStockMovement[]
+  inventoriesCreated       Inventory[]
+  conservationCostsCreated ConservationCost[]
+  productionOrdersCreated  ProductionOrder[]
+  finishedStockMovements   FinishedStockMovement[]
+  breedingBatchesCreated   BreedingBatch[]
+  breedingRecordsCreated   BreedingRecord[]
+  customerOrdersCreated    CustomerOrder[]
+  saleInvoicesCreated      SaleInvoice[]
+  customerPaymentsCreated  CustomerPayment[]
+  expensesCreated          Expense[]
+  passwordResetTokens      PasswordResetToken[]
+
+  // Sprint 7
+  accountsCreated         Account[]
+  treasuryEntriesCreated  TreasuryEntry[]
+  loansCreated            Loan[]
+  loanPaymentsCreated     LoanPayment[]
+  fixedAssetsCreated      FixedAsset[]
+  depreciationsCreated    DepreciationEntry[]
+  capitalMovementsCreated CapitalMovement[]
+  accountTransfersCreated AccountTransfer[]
+
+  @@index([email])
+  @@index([role])
+  @@map("users")
+}
+
+// =====================================================
+// PASSWORD RESET TOKEN
+// =====================================================
+
+model PasswordResetToken {
+  id        String    @id @default(uuid())
+  tokenHash String    @unique
+  userId    String
+  expiresAt DateTime
+  usedAt    DateTime?
+  createdAt DateTime  @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([expiresAt])
+  @@map("password_reset_tokens")
+}
+
+// =====================================================
+// SUPPLIER
+// =====================================================
+
+model Supplier {
+  id               String   @id @default(uuid())
+  name             String
+  phone            String
+  address          String
+  email            String?
+  productsSupplied String?  @db.Text
+  isActive         Boolean  @default(true)
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  purchaseOrders   PurchaseOrder[]
+  purchaseInvoices PurchaseInvoice[]
+  rawMaterialLots  RawMaterialLot[]
+
+  @@index([name])
+  @@index([isActive])
+  @@map("suppliers")
+}
+
+// =====================================================
+// PURCHASE ORDER
+// =====================================================
+
+model PurchaseOrder {
+  id           String              @id @default(uuid())
+  reference    String              @unique
+  supplierId   String
+  orderDate    DateTime
+  expectedDate DateTime?
+  status       PurchaseOrderStatus @default(DRAFT)
+  note         String?             @db.Text
+  totalAmount  Int                 @default(0)
+  cancelReason String?             @db.Text
+  createdById  String
+  createdAt    DateTime            @default(now())
+  updatedAt    DateTime            @updatedAt
+
+  supplier         Supplier            @relation(fields: [supplierId], references: [id])
+  createdBy        User                @relation(fields: [createdById], references: [id])
+  items            PurchaseOrderItem[]
+  purchaseInvoices PurchaseInvoice[]
+
+  @@index([supplierId])
+  @@index([status])
+  @@index([orderDate])
+  @@index([reference])
+  @@map("purchase_orders")
+}
+
+model PurchaseOrderItem {
+  id                String  @id @default(uuid())
+  purchaseOrderId   String
+  rawMaterialId     String?
+  itemName          String
+  unit              String
+  quantityOrdered   Decimal @db.Decimal(14, 4)
+  unitPriceEstimate Int
+  lineAmount        Int
+  quantityDelivered Decimal @default(0) @db.Decimal(14, 4)
+
+  purchaseOrder PurchaseOrder @relation(fields: [purchaseOrderId], references: [id], onDelete: Cascade)
+  rawMaterial   RawMaterial?  @relation(fields: [rawMaterialId], references: [id])
+
+  @@index([purchaseOrderId])
+  @@index([rawMaterialId])
+  @@map("purchase_order_items")
+}
+
+// =====================================================
+// PURCHASE INVOICE
+// =====================================================
+
+model PurchaseInvoice {
+  id                    String        @id @default(uuid())
+  reference             String        @unique
+  supplierInvoiceNumber String
+  supplierId            String
+  purchaseOrderId       String?
+  invoiceDate           DateTime
+  receptionDate         DateTime
+  totalAmount           Int           @default(0)
+  paymentStatus         PaymentStatus @default(UNPAID)
+  amountPaid            Int           @default(0)
+  amountRemaining       Int           @default(0)
+  totalTransportCost    Int           @default(0)
+  scanUrl               String?
+  createdById           String
+  createdAt             DateTime      @default(now())
+  updatedAt             DateTime      @updatedAt
+
+  supplier        Supplier              @relation(fields: [supplierId], references: [id])
+  purchaseOrder   PurchaseOrder?        @relation(fields: [purchaseOrderId], references: [id])
+  createdBy       User                  @relation(fields: [createdById], references: [id])
+  items           PurchaseInvoiceItem[]
+  payments        SupplierPayment[]
+  rawMaterialLots RawMaterialLot[]
+
+  @@index([supplierId])
+  @@index([purchaseOrderId])
+  @@index([paymentStatus])
+  @@index([invoiceDate])
+  @@index([reference])
+  @@map("purchase_invoices")
+}
+
+model PurchaseInvoiceItem {
+  id                String    @id @default(uuid())
+  purchaseInvoiceId String
+  rawMaterialId     String
+  itemName          String
+  quantity          Decimal   @db.Decimal(14, 4)
+  unit              String
+  unitPrice         Int
+  transportCost     Int       @default(0)
+  lineAmount        Int
+  lotNumber         String?
+  expirationDate    DateTime?
+
+  purchaseInvoice PurchaseInvoice @relation(fields: [purchaseInvoiceId], references: [id], onDelete: Cascade)
+  rawMaterial     RawMaterial     @relation(fields: [rawMaterialId], references: [id])
+
+  @@index([purchaseInvoiceId])
+  @@index([rawMaterialId])
+  @@map("purchase_invoice_items")
+}
+
+// =====================================================
+// SUPPLIER PAYMENT
+// =====================================================
+
+model SupplierPayment {
+  id                String        @id @default(uuid())
+  purchaseInvoiceId String
+  amount            Int
+  paymentDate       DateTime
+  paymentMethod     PaymentMethod
+  accountId         String?
+  note              String?       @db.Text
+  createdById       String
+  createdAt         DateTime      @default(now())
+  updatedAt         DateTime      @updatedAt
+
+  purchaseInvoice PurchaseInvoice @relation(fields: [purchaseInvoiceId], references: [id])
+  account         Account?        @relation(fields: [accountId], references: [id])
+  createdBy       User            @relation(fields: [createdById], references: [id])
+  treasuryEntries TreasuryEntry[]
+
+  @@index([purchaseInvoiceId])
+  @@index([accountId])
+  @@index([paymentDate])
+  @@map("supplier_payments")
+}
+
+// =====================================================
+// RAW MATERIAL (Phase 2)
+// =====================================================
+
+model RawMaterial {
+  id             String              @id @default(uuid())
+  code           String              @unique
+  name           String
+  category       RawMaterialCategory
+  unit           MeasurementUnit
+  weightPerBag   Decimal?            @db.Decimal(10, 4)
+  averagePrice   Int                 @default(0)
+  currentStock   Decimal             @default(0) @db.Decimal(14, 4)
+  alertThreshold Decimal             @default(0) @db.Decimal(14, 4)
+  isActive       Boolean             @default(true)
+  createdAt      DateTime            @default(now())
+  updatedAt      DateTime            @updatedAt
+
+  lots                 RawMaterialLot[]
+  movements            RawStockMovement[]
+  purchaseOrderItems   PurchaseOrderItem[]
+  purchaseInvoiceItems PurchaseInvoiceItem[]
+  inventoryItems       InventoryItem[]
+  formulaItems         FormulaItem[]
+
+  @@index([code])
+  @@index([category])
+  @@index([isActive])
+  @@map("raw_materials")
+}
+
+model RawMaterialLot {
+  id                   String    @id @default(uuid())
+  lotNumber            String    @unique
+  rawMaterialId        String
+  purchaseInvoiceId    String?
+  supplierId           String?
+  initialQuantity      Decimal   @db.Decimal(14, 4)
+  remainingQuantity    Decimal   @db.Decimal(14, 4)
+  receptionDate        DateTime
+  expirationDate       DateTime?
+  unitAcquisitionPrice Int
+  transportCost        Int       @default(0)
+  status               LotStatus @default(ACTIVE)
+  createdAt            DateTime  @default(now())
+  updatedAt            DateTime  @updatedAt
+
+  rawMaterial     RawMaterial        @relation(fields: [rawMaterialId], references: [id])
+  purchaseInvoice PurchaseInvoice?   @relation(fields: [purchaseInvoiceId], references: [id])
+  supplier        Supplier?          @relation(fields: [supplierId], references: [id])
+  movements       RawStockMovement[]
+
+  @@index([rawMaterialId])
+  @@index([status])
+  @@index([receptionDate])
+  @@index([expirationDate])
+  @@map("raw_material_lots")
+}
+
+model RawStockMovement {
+  id            String               @id @default(uuid())
+  rawMaterialId String
+  lotId         String?
+  type          RawStockMovementType
+  quantity      Decimal              @db.Decimal(14, 4)
+  movementDate  DateTime             @default(now())
+  referenceType StockReferenceType?
+  referenceId   String?
+  reason        String?              @db.Text
+  createdById   String
+  createdAt     DateTime             @default(now())
+
+  rawMaterial RawMaterial     @relation(fields: [rawMaterialId], references: [id])
+  lot         RawMaterialLot? @relation(fields: [lotId], references: [id])
+  createdBy   User            @relation(fields: [createdById], references: [id])
+
+  @@index([rawMaterialId])
+  @@index([type])
+  @@index([movementDate])
+  @@index([referenceType, referenceId])
+  @@map("raw_stock_movements")
+}
+
+// =====================================================
+// INVENTORY (Phase 2 — réutilisé en Phase 3 pour PF)
+// =====================================================
+
+model Inventory {
+  id            String          @id @default(uuid())
+  reference     String          @unique
+  type          InventoryType
+  inventoryDate DateTime
+  status        InventoryStatus @default(IN_PROGRESS)
+  note          String?         @db.Text
+  createdById   String
+  createdAt     DateTime        @default(now())
+  updatedAt     DateTime        @updatedAt
+
+  createdBy User            @relation(fields: [createdById], references: [id])
+  items     InventoryItem[]
+
+  @@index([type])
+  @@index([status])
+  @@index([inventoryDate])
+  @@map("inventories")
+}
+
+model InventoryItem {
+  id                String   @id @default(uuid())
+  inventoryId       String
+  rawMaterialId     String?
+  finishedProductId String?
+  theoreticalStock  Decimal  @db.Decimal(14, 4)
+  actualStock       Decimal? @db.Decimal(14, 4)
+  variance          Decimal? @db.Decimal(14, 4)
+  variancePercent   Decimal? @db.Decimal(8, 2)
+
+  inventory       Inventory        @relation(fields: [inventoryId], references: [id], onDelete: Cascade)
+  rawMaterial     RawMaterial?     @relation(fields: [rawMaterialId], references: [id])
+  finishedProduct FinishedProduct? @relation(fields: [finishedProductId], references: [id])
+
+  @@index([inventoryId])
+  @@index([rawMaterialId])
+  @@index([finishedProductId])
+  @@map("inventory_items")
+}
+
+// =====================================================
+// CONSERVATION COST (Phase 2 — réf. cahier 4.5)
+// =====================================================
+
+model ConservationCost {
+  id          String   @id @default(uuid())
+  periodStart DateTime
+  periodEnd   DateTime
+  totalAmount Int
+  note        String?  @db.Text
+  createdById String
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  createdBy User @relation(fields: [createdById], references: [id])
+
+  @@unique([periodStart, periodEnd])
+  @@index([periodStart])
+  @@map("conservation_costs")
+}
+
+// =====================================================
+// FINISHED PRODUCT (Phase 3)
+// =====================================================
+
+model FinishedProduct {
+  id             String                  @id @default(uuid())
+  code           String                  @unique
+  name           String
+  category       FinishedProductCategory
+  unit           FinishedProductUnit
+  wholesalePrice Int                     @default(0)
+  retailPrice    Int                     @default(0)
+  averageCost    Int                     @default(0)
+  currentStock   Decimal                 @default(0) @db.Decimal(14, 4)
+  alertThreshold Decimal                 @default(0) @db.Decimal(14, 4)
+  isActive       Boolean                 @default(true)
+  createdAt      DateTime                @default(now())
+  updatedAt      DateTime                @updatedAt
+
+  formulas           Formula[]
+  productionOrders   ProductionOrder[]
+  lots               FinishedProductLot[]
+  movements          FinishedStockMovement[]
+  inventoryItems     InventoryItem[]
+  customerOrderItems CustomerOrderItem[]
+  saleInvoiceItems   SaleInvoiceItem[]
+  priceHistory       FinishedProductPriceHistory[]
+
+  @@index([code])
+  @@index([category])
+  @@index([isActive])
+  @@map("finished_products")
+}
+
+// =====================================================
+// FORMULA (Phase 3 — recettes de fabrication)
+// =====================================================
+
+model Formula {
+  id                String   @id @default(uuid())
+  finishedProductId String
+  name              String
+  version           Int      @default(1)
+  productionUnit    String
+  unitWeightKg      Decimal  @db.Decimal(10, 4)
+  isActive          Boolean  @default(false)
+  technicalNote     String?  @db.Text
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  finishedProduct  FinishedProduct   @relation(fields: [finishedProductId], references: [id])
+  items            FormulaItem[]
+  productionOrders ProductionOrder[]
+
+  @@index([finishedProductId])
+  @@index([isActive])
+  @@map("formulas")
+}
+
+model FormulaItem {
+  id            String  @id @default(uuid())
+  formulaId     String
+  rawMaterialId String
+  quantity      Decimal @db.Decimal(14, 4)
+  proportion    Decimal @db.Decimal(8, 4)
+
+  formula     Formula     @relation(fields: [formulaId], references: [id], onDelete: Cascade)
+  rawMaterial RawMaterial @relation(fields: [rawMaterialId], references: [id])
+
+  @@index([formulaId])
+  @@index([rawMaterialId])
+  @@map("formula_items")
+}
+
+// =====================================================
+// PRODUCTION ORDER (Phase 3)
+// =====================================================
+
+model ProductionOrder {
+  id                 String                @id @default(uuid())
+  reference          String                @unique
+  formulaId          String
+  finishedProductId  String
+  targetQuantity     Decimal               @db.Decimal(14, 4)
+  producedQuantity   Decimal?              @db.Decimal(14, 4)
+  productionLoss     Decimal?              @db.Decimal(14, 4)
+  productionDate     DateTime
+  expirationDate     DateTime?
+  status             ProductionOrderStatus @default(PLANNED)
+  totalMaterialsCost Int                   @default(0)
+  transformationCost Int                   @default(0)
+  totalCost          Int                   @default(0)
+  unitCost           Int                   @default(0)
+  cancelReason       String?               @db.Text
+  note               String?               @db.Text
+  createdById        String
+  createdAt          DateTime              @default(now())
+  updatedAt          DateTime              @updatedAt
+
+  formula         Formula              @relation(fields: [formulaId], references: [id])
+  finishedProduct FinishedProduct      @relation(fields: [finishedProductId], references: [id])
+  createdBy       User                 @relation(fields: [createdById], references: [id])
+  lots            FinishedProductLot[]
+
+  @@index([finishedProductId])
+  @@index([status])
+  @@index([productionDate])
+  @@index([reference])
+  @@map("production_orders")
+}
+
+// =====================================================
+// FINISHED PRODUCT LOT
+// =====================================================
+
+model FinishedProductLot {
+  id                String            @id @default(uuid())
+  lotNumber         String            @unique
+  finishedProductId String
+  source            FinishedLotSource
+  productionOrderId String?
+  initialQuantity   Decimal           @db.Decimal(14, 4)
+  remainingQuantity Decimal           @db.Decimal(14, 4)
+  manufactureDate   DateTime
+  expirationDate    DateTime?
+  unitCost          Int
+  status            LotStatus         @default(ACTIVE)
+  createdAt         DateTime          @default(now())
+  updatedAt         DateTime          @updatedAt
+
+  finishedProduct  FinishedProduct         @relation(fields: [finishedProductId], references: [id])
+  productionOrder  ProductionOrder?        @relation(fields: [productionOrderId], references: [id])
+  breedingBatchId  String?
+  breedingBatch    BreedingBatch?          @relation(fields: [breedingBatchId], references: [id])
+  movements        FinishedStockMovement[]
+  saleInvoiceItems SaleInvoiceItem[]
+
+  @@index([finishedProductId])
+  @@index([breedingBatchId])
+  @@index([status])
+  @@index([manufactureDate])
+  @@index([expirationDate])
+  @@map("finished_product_lots")
+}
+
+// =====================================================
+// FINISHED STOCK MOVEMENT
+// =====================================================
+
+model FinishedStockMovement {
+  id                String                    @id @default(uuid())
+  finishedProductId String
+  lotId             String?
+  type              FinishedStockMovementType
+  quantity          Decimal                   @db.Decimal(14, 4)
+  movementDate      DateTime                  @default(now())
+  referenceType     StockReferenceType?
+  referenceId       String?
+  reason            String?                   @db.Text
+  createdById       String
+  createdAt         DateTime                  @default(now())
+
+  finishedProduct FinishedProduct     @relation(fields: [finishedProductId], references: [id])
+  lot             FinishedProductLot? @relation(fields: [lotId], references: [id])
+  createdBy       User                @relation(fields: [createdById], references: [id])
+
+  @@index([finishedProductId])
+  @@index([type])
+  @@index([movementDate])
+  @@index([referenceType, referenceId])
+  @@map("finished_stock_movements")
+}
+
+// =====================================================
+// BREEDING — Phase 4 (Élevage)
+// =====================================================
+
+model BreedingBatch {
+  id            String              @id @default(uuid())
+  reference     String              @unique
+  startDate     DateTime
+  closeDate     DateTime?
+  strain        String
+  initialCount  Int
+  currentCount  Int
+  chickSupplier String
+  chicksCost    Int
+  averageWeight Decimal             @default(0) @db.Decimal(10, 4)
+  status        BreedingBatchStatus @default(ACTIVE)
+  fixedCharges  Int                 @default(0)
+  totalFeedCost Int                 @default(0)
+  totalVetCost  Int                 @default(0)
+  totalCost     Int                 @default(0)
+  costPerHead   Int                 @default(0)
+  slaughterCost Int                 @default(0)
+  note          String?             @db.Text
+  createdById   String
+  createdAt     DateTime            @default(now())
+  updatedAt     DateTime            @updatedAt
+
+  createdBy           User                 @relation(fields: [createdById], references: [id])
+  records             BreedingRecord[]
+  finishedProductLots FinishedProductLot[]
+
+  @@index([status])
+  @@index([startDate])
+  @@index([reference])
+  @@map("breeding_batches")
+}
+
+model BreedingRecord {
+  id                    String   @id @default(uuid())
+  breedingBatchId       String
+  recordDate            DateTime
+  mortality             Int      @default(0)
+  mortalityCause        String?  @db.Text
+  feedFinishedProductId String?
+  feedQuantity          Decimal  @default(0) @db.Decimal(14, 4)
+  feedCost              Int      @default(0)
+  averageWeight         Decimal? @db.Decimal(10, 4)
+  vetTreatment          String?  @db.Text
+  vetCost               Int      @default(0)
+  observations          String?  @db.Text
+  createdById           String
+  createdAt             DateTime @default(now())
+
+  breedingBatch BreedingBatch @relation(fields: [breedingBatchId], references: [id], onDelete: Cascade)
+  createdBy     User          @relation(fields: [createdById], references: [id])
+
+  @@index([breedingBatchId])
+  @@index([recordDate])
+  @@map("breeding_records")
+}
+
+// =====================================================
+// CUSTOMER & SALES — Phase 5
+// =====================================================
+
+model Customer {
+  id            String                @id @default(uuid())
+  name          String
+  phone         String
+  address       String
+  email         String?
+  type          CustomerType          @default(INDIVIDUAL)
+  priceCategory CustomerPriceCategory @default(RETAIL)
+  paymentTerms  String?
+  creditLimit   Int                   @default(0)
+  isWalkIn      Boolean               @default(false)
+  isActive      Boolean               @default(true)
+  createdAt     DateTime              @default(now())
+  updatedAt     DateTime              @updatedAt
+
+  customerOrders CustomerOrder[]
+  saleInvoices   SaleInvoice[]
+
+  @@index([name])
+  @@index([type])
+  @@index([priceCategory])
+  @@index([isActive])
+  @@map("customers")
+}
+
+model CustomerOrder {
+  id           String              @id @default(uuid())
+  reference    String              @unique
+  customerId   String
+  orderDate    DateTime
+  expectedDate DateTime?
+  status       CustomerOrderStatus @default(PENDING)
+  totalAmount  Int                 @default(0)
+  note         String?             @db.Text
+  cancelReason String?             @db.Text
+  createdById  String
+  createdAt    DateTime            @default(now())
+  updatedAt    DateTime            @updatedAt
+
+  customer  Customer            @relation(fields: [customerId], references: [id])
+  createdBy User                @relation(fields: [createdById], references: [id])
+  items     CustomerOrderItem[]
+  invoices  SaleInvoice[]
+
+  @@index([customerId])
+  @@index([status])
+  @@index([orderDate])
+  @@index([reference])
+  @@map("customer_orders")
+}
+
+model CustomerOrderItem {
+  id                String  @id @default(uuid())
+  customerOrderId   String
+  finishedProductId String
+  quantityOrdered   Decimal @db.Decimal(14, 4)
+  unitPrice         Int
+  lineAmount        Int
+  quantityDelivered Decimal @default(0) @db.Decimal(14, 4)
+
+  customerOrder   CustomerOrder   @relation(fields: [customerOrderId], references: [id], onDelete: Cascade)
+  finishedProduct FinishedProduct @relation(fields: [finishedProductId], references: [id])
+
+  @@index([customerOrderId])
+  @@index([finishedProductId])
+  @@map("customer_order_items")
+}
+
+model SaleInvoice {
+  id              String            @id @default(uuid())
+  reference       String            @unique
+  type            SaleInvoiceType   @default(INVOICE)
+  customerId      String
+  customerOrderId String?
+  invoiceDate     DateTime
+  totalAmount     Int               @default(0)
+  paymentMethod   SalePaymentMethod
+  paymentStatus   PaymentStatus     @default(UNPAID)
+  amountPaid      Int               @default(0)
+  amountRemaining Int               @default(0)
+  note            String?           @db.Text
+  parentInvoiceId String? // pour les credit notes
+  createdById     String
+  createdAt       DateTime          @default(now())
+  updatedAt       DateTime          @updatedAt
+
+  customer      Customer          @relation(fields: [customerId], references: [id])
+  customerOrder CustomerOrder?    @relation(fields: [customerOrderId], references: [id])
+  parentInvoice SaleInvoice?      @relation("CreditNotes", fields: [parentInvoiceId], references: [id])
+  creditNotes   SaleInvoice[]     @relation("CreditNotes")
+  createdBy     User              @relation(fields: [createdById], references: [id])
+  items         SaleInvoiceItem[]
+  payments      CustomerPayment[]
+
+  @@index([customerId])
+  @@index([customerOrderId])
+  @@index([type])
+  @@index([paymentStatus])
+  @@index([invoiceDate])
+  @@index([reference])
+  @@map("sale_invoices")
+}
+
+model SaleInvoiceItem {
+  id                String  @id @default(uuid())
+  saleInvoiceId     String
+  finishedProductId String
+  finishedLotId     String?
+  productName       String
+  quantity          Decimal @db.Decimal(14, 4)
+  unitPrice         Int
+  lineAmount        Int
+
+  saleInvoice     SaleInvoice         @relation(fields: [saleInvoiceId], references: [id], onDelete: Cascade)
+  finishedProduct FinishedProduct     @relation(fields: [finishedProductId], references: [id])
+  finishedLot     FinishedProductLot? @relation(fields: [finishedLotId], references: [id])
+
+  @@index([saleInvoiceId])
+  @@index([finishedProductId])
+  @@index([finishedLotId])
+  @@map("sale_invoice_items")
+}
+
+model FinishedProductPriceHistory {
+  id                String   @id @default(uuid())
+  finishedProductId String
+  customerId        String?
+  saleInvoiceId     String?
+  unitPrice         Int
+  recordedAt        DateTime @default(now())
+
+  finishedProduct FinishedProduct @relation(fields: [finishedProductId], references: [id])
+
+  @@index([finishedProductId])
+  @@index([recordedAt])
+  @@map("finished_product_price_history")
+}
+
+model CustomerPayment {
+  id            String            @id @default(uuid())
+  saleInvoiceId String
+  amount        Int
+  paymentDate   DateTime
+  paymentMethod SalePaymentMethod
+  accountId     String?
+  note          String?           @db.Text
+  createdById   String
+  createdAt     DateTime          @default(now())
+
+  saleInvoice     SaleInvoice     @relation(fields: [saleInvoiceId], references: [id])
+  account         Account?        @relation(fields: [accountId], references: [id])
+  createdBy       User            @relation(fields: [createdById], references: [id])
+  treasuryEntries TreasuryEntry[]
+
+  @@index([saleInvoiceId])
+  @@index([accountId])
+  @@index([paymentDate])
+  @@map("customer_payments")
+}
+
+// =====================================================
+// EXPENSES — Phase 6
+// =====================================================
+
+model ExpenseCategory {
+  id           String   @id @default(uuid())
+  name         String   @unique
+  displayOrder Int      @default(0)
+  isDefault    Boolean  @default(false)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  expenses Expense[]
+
+  @@map("expense_categories")
+}
+
+model Expense {
+  id                   String          @id @default(uuid())
+  amount               Int
+  categoryId           String
+  activity             ExpenseActivity
+  expenseDate          DateTime
+  description          String?         @db.Text
+  beneficiary          String?
+  receiptUrl           String?
+  status               ExpenseStatus   @default(CONFIRMED)
+  isRecurring          Boolean         @default(false)
+  recurrenceDayOfMonth Int?
+  parentRecurringId    String?
+  accountId            String?
+  createdById          String
+  createdAt            DateTime        @default(now())
+  updatedAt            DateTime        @updatedAt
+
+  category        ExpenseCategory @relation(fields: [categoryId], references: [id])
+  account         Account?        @relation(fields: [accountId], references: [id])
+  createdBy       User            @relation(fields: [createdById], references: [id])
+  parent          Expense?        @relation("RecurringInstances", fields: [parentRecurringId], references: [id])
+  instances       Expense[]       @relation("RecurringInstances")
+  treasuryEntries TreasuryEntry[]
+
+  @@index([categoryId])
+  @@index([accountId])
+  @@index([activity])
+  @@index([expenseDate])
+  @@index([status])
+  @@index([isRecurring])
+  @@map("expenses")
+}
+
+// =====================================================
+// SEQUENCE COUNTER
+// =====================================================
+
+model SequenceCounter {
+  id        String   @id @default(uuid())
+  prefix    String
+  year      Int
+  counter   Int      @default(0)
+  updatedAt DateTime @updatedAt
+
+  @@unique([prefix, year])
+  @@map("sequence_counters")
+}
+
+// =====================================================
+// SPRINT 7 — FINANCE & TRÉSORERIE
+// =====================================================
+
+// Compte de trésorerie (caisse, banque, mobile money, e-wallet)
+// La balance n'est PAS stockée — elle est calculée dynamiquement
+// via SUM(treasury_entries.amount) + openingBalance
+model Account {
+  id             String      @id @default(uuid())
+  name           String
+  type           AccountType
+  bankName       String? // pour BANK : nom de la banque
+  accountNumber  String? // RIB / numéro de compte / numéro mobile
+  currency       String      @default("XOF")
+  openingBalance Int         @default(0)
+  isActive       Boolean     @default(true)
+  note           String?     @db.Text
+  createdById    String
+  createdAt      DateTime    @default(now())
+  updatedAt      DateTime    @updatedAt
+
+  createdBy User @relation(fields: [createdById], references: [id])
+
+  // Relations entrantes
+  supplierPayments  SupplierPayment[]
+  customerPayments  CustomerPayment[]
+  expenses          Expense[]
+  loanDisbursements Loan[]            @relation("LoanDisbursementAccount")
+  loanPayments      LoanPayment[]
+  capitalMovements  CapitalMovement[]
+  fixedAssets       FixedAsset[]
+  transfersOut      AccountTransfer[] @relation("FromAccount")
+  transfersIn       AccountTransfer[] @relation("ToAccount")
+  treasuryEntries   TreasuryEntry[]
+
+  @@unique([name])
+  @@index([type])
+  @@index([isActive])
+  @@map("accounts")
+}
+
+// Entrée unifiée du grand livre de trésorerie
+// Toute opération qui touche un compte (paiement, dépense, transfert, apport, remboursement de prêt…)
+// génère une ligne ici. C'est la source de vérité pour le calcul des soldes.
+model TreasuryEntry {
+  id                String              @id @default(uuid())
+  accountId         String
+  entryDate         DateTime
+  amount            Int // signé : positif = crédit, négatif = débit
+  source            TreasuryEntrySource
+  // Références polymorphiques vers la source originelle (pour audit + suppression)
+  supplierPaymentId String?
+  customerPaymentId String?
+  expenseId         String?
+  loanId            String?
+  loanPaymentId     String?
+  accountTransferId String?
+  capitalMovementId String?
+  fixedAssetId      String?
+
+  description String?  @db.Text
+  createdById String
+  createdAt   DateTime @default(now())
+
+  account         Account          @relation(fields: [accountId], references: [id])
+  supplierPayment SupplierPayment? @relation(fields: [supplierPaymentId], references: [id], onDelete: Cascade)
+  customerPayment CustomerPayment? @relation(fields: [customerPaymentId], references: [id], onDelete: Cascade)
+  expense         Expense?         @relation(fields: [expenseId], references: [id], onDelete: Cascade)
+  loan            Loan?            @relation(fields: [loanId], references: [id], onDelete: Cascade)
+  loanPayment     LoanPayment?     @relation(fields: [loanPaymentId], references: [id], onDelete: Cascade)
+  accountTransfer AccountTransfer? @relation(fields: [accountTransferId], references: [id], onDelete: Cascade)
+  capitalMovement CapitalMovement? @relation(fields: [capitalMovementId], references: [id], onDelete: Cascade)
+  fixedAsset      FixedAsset?      @relation(fields: [fixedAssetId], references: [id], onDelete: Cascade)
+  createdBy       User             @relation(fields: [createdById], references: [id])
+
+  @@index([accountId])
+  @@index([entryDate])
+  @@index([source])
+  @@map("treasury_entries")
+}
+
+// Transfert entre deux comptes (ex: dépôt en banque depuis la caisse)
+model AccountTransfer {
+  id            String   @id @default(uuid())
+  reference     String   @unique
+  fromAccountId String
+  toAccountId   String
+  amount        Int
+  transferDate  DateTime
+  fees          Int      @default(0) // frais éventuels (déduits du compte source en plus)
+  description   String?  @db.Text
+  createdById   String
+  createdAt     DateTime @default(now())
+
+  fromAccount     Account         @relation("FromAccount", fields: [fromAccountId], references: [id])
+  toAccount       Account         @relation("ToAccount", fields: [toAccountId], references: [id])
+  createdBy       User            @relation(fields: [createdById], references: [id])
+  treasuryEntries TreasuryEntry[]
+
+  @@index([fromAccountId])
+  @@index([toAccountId])
+  @@index([transferDate])
+  @@map("account_transfers")
+}
+
+// Prêt bancaire / dette
+model Loan {
+  id                    String     @id @default(uuid())
+  reference             String     @unique
+  lenderName            String // nom de la banque ou du prêteur
+  principalAmount       Int // capital emprunté
+  annualInterestRate    Decimal    @db.Decimal(6, 4) // ex: 0.0850 = 8.5%
+  termMonths            Int // durée en mois
+  startDate             DateTime
+  firstPaymentDate      DateTime
+  disbursementAccountId String? // compte qui reçoit les fonds
+  paymentDayOfMonth     Int        @default(1)
+  status                LoanStatus @default(ACTIVE)
+  totalToRepay          Int        @default(0) // calculé : capital + intérêts totaux
+  totalInterest         Int        @default(0)
+  remainingPrincipal    Int        @default(0)
+  contractScanUrl       String?
+  note                  String?    @db.Text
+  createdById           String
+  createdAt             DateTime   @default(now())
+  updatedAt             DateTime   @updatedAt
+
+  disbursementAccount Account?           @relation("LoanDisbursementAccount", fields: [disbursementAccountId], references: [id])
+  createdBy           User               @relation(fields: [createdById], references: [id])
+  schedule            LoanScheduleItem[]
+  payments            LoanPayment[]
+  treasuryEntries     TreasuryEntry[]
+
+  @@index([status])
+  @@index([startDate])
+  @@index([reference])
+  @@map("loans")
+}
+
+// Échéancier mensuel (généré automatiquement à la création du prêt)
+model LoanScheduleItem {
+  id               String                 @id @default(uuid())
+  loanId           String
+  installmentNo    Int // 1, 2, 3…
+  dueDate          DateTime
+  principalDue     Int // part capital
+  interestDue      Int // part intérêts
+  totalDue         Int
+  remainingBalance Int // capital restant après cette échéance
+  status           LoanScheduleItemStatus @default(PENDING)
+  amountPaid       Int                    @default(0)
+  paidAt           DateTime?
+
+  loan Loan @relation(fields: [loanId], references: [id], onDelete: Cascade)
+
+  @@unique([loanId, installmentNo])
+  @@index([loanId])
+  @@index([dueDate])
+  @@index([status])
+  @@map("loan_schedule_items")
+}
+
+// Remboursement d'une (ou plusieurs) échéance(s) — peut être partiel
+model LoanPayment {
+  id            String        @id @default(uuid())
+  loanId        String
+  amount        Int
+  principalPart Int // imputé sur le capital
+  interestPart  Int // imputé sur les intérêts (= charge financière)
+  paymentDate   DateTime
+  accountId     String?
+  paymentMethod PaymentMethod
+  note          String?       @db.Text
+  createdById   String
+  createdAt     DateTime      @default(now())
+
+  loan            Loan            @relation(fields: [loanId], references: [id])
+  account         Account?        @relation(fields: [accountId], references: [id])
+  createdBy       User            @relation(fields: [createdById], references: [id])
+  treasuryEntries TreasuryEntry[]
+
+  @@index([loanId])
+  @@index([accountId])
+  @@index([paymentDate])
+  @@map("loan_payments")
+}
+
+// Immobilisation (véhicule, matériel, bâtiment…)
+model FixedAsset {
+  id                       String             @id @default(uuid())
+  reference                String             @unique
+  name                     String
+  category                 FixedAssetCategory
+  acquisitionDate          DateTime
+  acquisitionCost          Int // valeur brute d'origine
+  salvageValue             Int                @default(0) // valeur résiduelle
+  usefulLifeMonths         Int // durée d'utilité en mois (ex: 60 = 5 ans)
+  method                   DepreciationMethod @default(STRAIGHT_LINE)
+  decliningRate            Decimal?           @db.Decimal(6, 4) // pour DECLINING_BALANCE (ex: 0.20)
+  status                   FixedAssetStatus   @default(IN_SERVICE)
+  paymentAccountId         String? // compte d'où l'achat a été payé (génère écriture trésorerie)
+  recordPurchaseAsTreasury Boolean            @default(true) // si false : déjà enregistré ailleurs
+  serialNumber             String?
+  location                 String?
+  disposalDate             DateTime?
+  disposalAmount           Int?
+  note                     String?            @db.Text
+  createdById              String
+  createdAt                DateTime           @default(now())
+  updatedAt                DateTime           @updatedAt
+
+  paymentAccount  Account?            @relation(fields: [paymentAccountId], references: [id])
+  createdBy       User                @relation(fields: [createdById], references: [id])
+  depreciations   DepreciationEntry[]
+  treasuryEntries TreasuryEntry[]
+
+  @@index([category])
+  @@index([status])
+  @@index([acquisitionDate])
+  @@map("fixed_assets")
+}
+
+// Dotation aux amortissements mensuelle (générée par cron)
+// C'est ÇA qui doit apparaître dans le P&L, pas le coût d'acquisition brut.
+model DepreciationEntry {
+  id                      String   @id @default(uuid())
+  fixedAssetId            String
+  periodYear              Int
+  periodMonth             Int // 1..12
+  amount                  Int // dotation du mois
+  accumulatedDepreciation Int // cumul après cette dotation
+  netBookValue            Int // valeur nette comptable après cette dotation
+  createdById             String
+  createdAt               DateTime @default(now())
+
+  fixedAsset FixedAsset @relation(fields: [fixedAssetId], references: [id], onDelete: Cascade)
+  createdBy  User       @relation(fields: [createdById], references: [id])
+
+  @@unique([fixedAssetId, periodYear, periodMonth])
+  @@index([fixedAssetId])
+  @@index([periodYear, periodMonth])
+  @@map("depreciation_entries")
+}
+
+// Mouvements de capital : apports, retraits associés, subventions, dons, dividendes
+// N'affecte PAS le résultat (compte de résultat) mais affecte la trésorerie.
+model CapitalMovement {
+  id              String              @id @default(uuid())
+  reference       String              @unique
+  type            CapitalMovementType
+  amount          Int
+  movementDate    DateTime
+  accountId       String // compte impacté
+  contributorName String? // nom de l'associé / organisme
+  description     String?             @db.Text
+  documentUrl     String?
+  createdById     String
+  createdAt       DateTime            @default(now())
+  updatedAt       DateTime            @updatedAt
+
+  account         Account         @relation(fields: [accountId], references: [id])
+  createdBy       User            @relation(fields: [createdById], references: [id])
+  treasuryEntries TreasuryEntry[]
+
+  @@index([type])
+  @@index([accountId])
+  @@index([movementDate])
+  @@map("capital_movements")
+}
