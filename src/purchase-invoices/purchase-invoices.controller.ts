@@ -4,16 +4,26 @@ import {
   Get,
   Param,
   ParseUUIDPipe,
+  Patch,
   Post,
   Query,
 } from '@nestjs/common';
-import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
+import { ApiBearerAuth, ApiOperation, ApiProperty, ApiTags } from '@nestjs/swagger';
 import { UserRole } from '@prisma/client';
+import { IsString, MaxLength, MinLength } from 'class-validator';
 import { PurchaseInvoicesService } from './purchase-invoices.service';
 import { CreatePurchaseInvoiceDto } from './dto/create-purchase-invoice.dto';
 import { QueryPurchaseInvoicesDto } from './dto/query-purchase-invoices.dto';
 import { Roles } from '../common/decorators/roles.decorator';
 import { CurrentUser, AuthenticatedUser } from '../common/decorators/current-user.decorator';
+
+class CancelPurchaseInvoiceDto {
+  @ApiProperty({ description: "Motif d'annulation (minimum 3 caractères)" })
+  @IsString()
+  @MinLength(3)
+  @MaxLength(500)
+  reason!: string;
+}
 
 @ApiTags('Purchase Invoices')
 @ApiBearerAuth('JWT-auth')
@@ -47,5 +57,21 @@ export class PurchaseInvoicesController {
   @ApiOperation({ summary: "Détail d'une facture d'achat avec lignes et paiements" })
   findOne(@Param('id', new ParseUUIDPipe()) id: string) {
     return this.service.findOne(id);
+  }
+
+  @Patch(':id/cancel')
+  @Roles(UserRole.DIRECTOR)
+  @ApiOperation({
+    summary: "Annuler une facture d'achat (soft-delete)",
+    description:
+      "Marque la facture annulée + invalide les lots créés (s'ils n'ont pas été consommés). " +
+      "Refusé si paiements liés ou lots déjà entamés. Réservé au DIRECTOR.",
+  })
+  cancel(
+    @Param('id', new ParseUUIDPipe()) id: string,
+    @Body() dto: CancelPurchaseInvoiceDto,
+    @CurrentUser() user: AuthenticatedUser,
+  ) {
+    return this.service.cancel(id, dto.reason, user.id);
   }
 }

@@ -1,7 +1,10 @@
 import {
   Body,
   Controller,
+  Delete,
   Get,
+  Param,
+  ParseUUIDPipe,
   Post,
   Query,
 } from '@nestjs/common';
@@ -102,5 +105,22 @@ export class CustomerPaymentsController {
   @ApiOperation({ summary: 'Liste paginée des paiements clients' })
   findAll(@Query() query: QueryCustomerPaymentsDto) {
     return this.service.findAll(query, query);
+  }
+
+  @Get(':id')
+  @ApiOperation({ summary: "Détail d'un paiement client" })
+  findOne(@Param('id', new ParseUUIDPipe()) id: string) {
+    return this.service.findOne(id);
+  }
+
+  @Delete(':id')
+  @Roles(UserRole.DIRECTOR)
+  @ApiOperation({
+    summary: 'Supprimer un paiement client',
+    description:
+      "Réajuste automatiquement le solde de la facture liée et supprime l'écriture de trésorerie. Réservé au DIRECTOR.",
+  })
+  remove(@Param('id', new ParseUUIDPipe()) id: string) {
+    return this.service.remove(id);
   }
 }

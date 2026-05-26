@@ -16,7 +16,9 @@ import { CreateRawMaterialDto } from './dto/create-raw-material.dto';
 import { UpdateRawMaterialDto } from './dto/update-raw-material.dto';
 import { QueryRawMaterialsDto } from './dto/query-raw-materials.dto';
 import { QueryMovementsDto } from './dto/query-movements.dto';
+import { DeclareLossDto } from './dto/declare-loss.dto';
 import { Roles } from '../common/decorators/roles.decorator';
+import { CurrentUser, AuthenticatedUser } from '../common/decorators/current-user.decorator';
 
 @ApiTags('Raw Materials')
 @ApiBearerAuth('JWT-auth')
@@ -96,6 +98,21 @@ export class RawMaterialsController {
     @Body() dto: UpdateRawMaterialDto,
   ) {
     return this.service.update(id, dto);
+  }
+
+  @Post(':id/loss')
+  @Roles(UserRole.DIRECTOR, UserRole.PRODUCTION_MANAGER, UserRole.OPERATOR)
+  @ApiOperation({
+    summary: 'Déclarer une perte/casse sur une matière première',
+    description:
+      'Crée un mouvement LOSS qui décrémente le stock en FIFO. Le motif est obligatoire et tracé.',
+  })
+  declareLoss(
+    @Param('id', new ParseUUIDPipe()) id: string,
+    @Body() dto: DeclareLossDto,
+    @CurrentUser() user: AuthenticatedUser,
+  ) {
+    return this.service.declareLoss(id, dto, user.id);
   }
 
   @Patch(':id/deactivate')

@@ -4,17 +4,51 @@ import {
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
-import { LotStatus, MeasurementUnit, Prisma } from '@prisma/client';
+import {
+  LotStatus,
+  MeasurementUnit,
+  Prisma,
+  RawStockMovementType,
+  StockReferenceType,
+} from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
+import { RawStockService } from '../raw-stock/raw-stock.service';
 import { CreateRawMaterialDto } from './dto/create-raw-material.dto';
 import { UpdateRawMaterialDto } from './dto/update-raw-material.dto';
 import { QueryRawMaterialsDto } from './dto/query-raw-materials.dto';
 import { QueryMovementsDto } from './dto/query-movements.dto';
+import { DeclareLossDto } from './dto/declare-loss.dto';
 import { paginate } from '../common/dto/pagination.dto';
 
 @Injectable()
 export class RawMaterialsService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly rawStockService: RawStockService,
+  ) {}
+
+  /**
+   * Déclare une perte/casse manuelle sur une matière première.
+   * Consomme le stock en FIFO et crée un mouvement de type LOSS avec motif obligatoire.
+   */
+  async declareLoss(rawMaterialId: string, dto: DeclareLossDto, userId: string) {
+    return this.prisma.$transaction(async (tx) => {
+      const result = await this.rawStockService.consumeStock(tx, {
+        rawMaterialId,
+        quantity: dto.quantity,
+        movementType: RawStockMovementType.LOSS,
+        referenceType: StockReferenceType.MANUAL,
+        reason: dto.reason,
+        userId,
+      });
+      return {
+        message: 'Perte enregistrée',
+        consumedLots: result.consumedLots,
+        totalQuantity: result.totalQuantity,
+        totalCost: result.totalCost,
+      };
+    });
+  }
 
   async create(dto: CreateRawMaterialDto) {
     if (dto.unit === MeasurementUnit.BAG && !dto.weightPerBag) {

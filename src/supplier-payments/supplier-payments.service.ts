@@ -148,4 +148,67 @@ export class SupplierPaymentsService {
 
     return paginate(items, total, query.page, query.limit);
   }
+
+  async findOne(id: string) {
+    const payment = await this.prisma.supplierPayment.findUnique({
+      where: { id },
+      include: {
+        purchaseInvoice: {
+          select: {
+            id: true,
+            reference: true,
+            supplierInvoiceNumber: true,
+            totalAmount: true,
+            amountPaid: true,
+            amountRemaining: true,
+            supplier: { select: { id: true, name: true } },
+          },
+        },
+        account: { select: { id: true, name: true } },
+        createdBy: { select: { id: true, fullName: true } },
+      },
+    });
+    if (!payment) throw new NotFoundException('Paiement introuvable');
+    return payment;
+  }
+
+  /**
+   * Annule (hard-delete) un paiement fournisseur.
+   * - Réajuste `amountPaid`/`amountRemaining`/`paymentStatus` de la facture
+   * - Supprime l'écriture de trésorerie liée (cascade via FK Prisma)
+   */
+  async remove(id: string) {
+    const payment = await this.prisma.supplierPayment.findUnique({
+      where: { id },
+      include: { purchaseInvoice: true },
+    });
+    if (!payment) throw new NotFoundException('Paiement introuvable');
+
+    return this.prisma.$transaction(async (tx) => {
+      const invoice = payment.purchaseInvoice;
+      const newAmountPaid = Math.max(0, invoice.amountPaid - payment.amount);
+      const newAmountRemaining = invoice.totalAmount - newAmountPaid;
+      const newStatus: PaymentStatus =
+        newAmountPaid === 0
+          ? PaymentStatus.UNPAID
+          : newAmountRemaining <= 0
+            ? PaymentStatus.PAID
+            : PaymentStatus.PARTIALLY_PAID;
+
+      await tx.purchaseInvoice.update({
+        where: { id: invoice.id },
+        data: {
+          amountPaid: newAmountPaid,
+          amountRemaining: Math.max(0, newAmountRemaining),
+          paymentStatus: newStatus,
+        },
+      });
+
+      // Les TreasuryEntry liées ont `onDelete: Cascade` sur supplierPaymentId
+      // donc elles disparaissent automatiquement à la suppression du paiement.
+      await tx.supplierPayment.delete({ where: { id } });
+
+      return { message: 'Paiement supprimé — facture mise à jour' };
+    });
+  }
 }

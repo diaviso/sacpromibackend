@@ -3,19 +3,52 @@ import {
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
-import { LotStatus, Prisma } from '@prisma/client';
+import {
+  FinishedStockMovementType,
+  LotStatus,
+  Prisma,
+  StockReferenceType,
+} from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
+import { FinishedStockService } from '../finished-stock/finished-stock.service';
 import { CreateFinishedProductDto } from './dto/create-finished-product.dto';
 import { UpdateFinishedProductDto } from './dto/update-finished-product.dto';
 import { QueryFinishedProductsDto } from './dto/query-finished-products.dto';
+import { DeclareLossDto } from './dto/declare-loss.dto';
 import { paginate } from '../common/dto/pagination.dto';
 
 @Injectable()
 export class FinishedProductsService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly finishedStockService: FinishedStockService,
+  ) {}
 
   async create(dto: CreateFinishedProductDto) {
     return this.prisma.finishedProduct.create({ data: dto });
+  }
+
+  /**
+   * Déclare une perte/casse manuelle sur un produit fini.
+   * Consomme le stock en FIFO et crée un mouvement de type LOSS.
+   */
+  async declareLoss(finishedProductId: string, dto: DeclareLossDto, userId: string) {
+    return this.prisma.$transaction(async (tx) => {
+      const result = await this.finishedStockService.consumeFinishedStock(tx, {
+        finishedProductId,
+        quantity: dto.quantity,
+        movementType: FinishedStockMovementType.LOSS,
+        referenceType: StockReferenceType.MANUAL,
+        reason: dto.reason,
+        userId,
+      });
+      return {
+        message: 'Perte enregistrée',
+        consumedLots: result.consumedLots,
+        totalQuantity: result.totalQuantity,
+        totalCost: result.totalCost,
+      };
+    });
   }
 
   async findAll(query: QueryFinishedProductsDto) {

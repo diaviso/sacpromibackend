@@ -1,9 +1,10 @@
 import {
   BadRequestException,
   Injectable,
+  Logger,
   NotFoundException,
 } from '@nestjs/common';
-import { Prisma } from '@prisma/client';
+import { LotStatus, Prisma, RawStockMovementType, StockReferenceType } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { SequenceService } from '../common/services/sequence.service';
 import { PurchaseOrdersService } from '../purchase-orders/purchase-orders.service';
@@ -14,6 +15,8 @@ import { paginate } from '../common/dto/pagination.dto';
 
 @Injectable()
 export class PurchaseInvoicesService {
+  private readonly logger = new Logger(PurchaseInvoicesService.name);
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly sequence: SequenceService,
@@ -138,6 +141,8 @@ export class PurchaseInvoicesService {
 
   async findAll(query: QueryPurchaseInvoicesDto) {
     const where: Prisma.PurchaseInvoiceWhereInput = {};
+    // Exclure les factures annulées (soft-delete)
+    where.deletedAt = null;
     if (query.paymentStatus) where.paymentStatus = query.paymentStatus;
     if (query.supplierId) where.supplierId = query.supplierId;
     if (query.from || query.to) {
@@ -201,5 +206,117 @@ export class PurchaseInvoicesService {
       throw new NotFoundException(`Facture ${id} introuvable`);
     }
     return invoice;
+  }
+
+  /**
+   * Annulation totale d'une facture d'achat (soft-delete).
+   *
+   * Effets :
+   * - Marque la facture `deletedAt` + `deletedReason`
+   * - Pour chaque lot créé par cette facture :
+   *   * Refuse si le lot a été partiellement ou totalement consommé
+   *   * Sinon : marque le lot DEPLETED + crée mouvement ADJUSTMENT (-qty) + décrémente le stock
+   * - Ne touche PAS au prix moyen pondéré (acceptable car les lots récents annulés
+   *   ont peu de poids dans la moyenne pondérée déjà calculée).
+   *
+   * Refus si :
+   * - Paiements liés (annuler d'abord)
+   * - Au moins un lot a été (partiellement) consommé → trop tard, faire un avoir
+   * - Déjà annulée
+   *
+   * Réservé au DIRECTOR.
+   */
+  async cancel(
+    id: string,
+    reason: string,
+    userId: string,
+  ): Promise<{ message: string; invoiceId: string }> {
+    if (!reason || reason.trim().length < 3) {
+      throw new BadRequestException("Motif d'annulation obligatoire (minimum 3 caractères)");
+    }
+
+    const invoice = await this.prisma.purchaseInvoice.findUnique({
+      where: { id },
+      include: {
+        items: true,
+        payments: true,
+        rawMaterialLots: true,
+      },
+    });
+    if (!invoice) throw new NotFoundException(`Facture ${id} introuvable`);
+    if (invoice.deletedAt) throw new BadRequestException('Facture déjà annulée');
+    if (invoice.payments.length > 0) {
+      throw new BadRequestException(
+        `Impossible : ${invoice.payments.length} paiement(s) enregistré(s). Annulez les paiements d'abord.`,
+      );
+    }
+
+    // Vérifier qu'aucun lot n'a été consommé
+    const consumedLots = invoice.rawMaterialLots.filter(
+      (lot) => Number(lot.remainingQuantity) < Number(lot.initialQuantity),
+    );
+    if (consumedLots.length > 0) {
+      throw new BadRequestException(
+        `Impossible : ${consumedLots.length} lot(s) déjà partiellement consommé(s) : ` +
+          consumedLots.map((l) => l.lotNumber).join(', ') +
+          `. Utilisez un retour marchandise au lieu d'annuler.`,
+      );
+    }
+
+    return this.prisma.$transaction(async (tx) => {
+      // Pour chaque lot : invalider + mouvement d'ajustement négatif + décrémente stock
+      for (const lot of invoice.rawMaterialLots) {
+        const qty = Number(lot.remainingQuantity); // = initialQuantity puisque non consommé
+        await tx.rawStockMovement.create({
+          data: {
+            rawMaterialId: lot.rawMaterialId,
+            lotId: lot.id,
+            type: RawStockMovementType.ADJUSTMENT,
+            quantity: -qty,
+            referenceType: StockReferenceType.PURCHASE_INVOICE,
+            referenceId: invoice.id,
+            reason: `Annulation facture ${invoice.reference} : ${reason}`,
+            createdById: userId,
+          },
+        });
+        await tx.rawMaterialLot.update({
+          where: { id: lot.id },
+          data: {
+            remainingQuantity: 0,
+            status: LotStatus.DEPLETED,
+          },
+        });
+        await tx.rawMaterial.update({
+          where: { id: lot.rawMaterialId },
+          data: { currentStock: { decrement: qty } },
+        });
+      }
+
+      // Si liée à un BC, revenir en arrière sur les quantités livrées
+      if (invoice.purchaseOrderId) {
+        for (const item of invoice.items) {
+          await tx.purchaseOrderItem.updateMany({
+            where: {
+              purchaseOrderId: invoice.purchaseOrderId,
+              itemName: item.itemName,
+            },
+            data: { quantityDelivered: { decrement: Number(item.quantity) } },
+          });
+        }
+        // Note : on ne recalcule pas le statut du BC ici (DELIVERED → VALIDATED) —
+        // ça resterait correct car le BC garde son statut historique.
+      }
+
+      // Soft-delete
+      await tx.purchaseInvoice.update({
+        where: { id },
+        data: { deletedAt: new Date(), deletedReason: reason.trim() },
+      });
+
+      this.logger.warn(
+        `Facture d'achat ${invoice.reference} annulée par user ${userId} — motif : ${reason}`,
+      );
+      return { message: 'Facture annulée — stock corrigé', invoiceId: id };
+    });
   }
 }

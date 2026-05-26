@@ -1,4 +1,13 @@
-import { Body, Controller, Get, Post, Query } from '@nestjs/common';
+import {
+  Body,
+  Controller,
+  Delete,
+  Get,
+  Param,
+  ParseUUIDPipe,
+  Post,
+  Query,
+} from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { UserRole } from '@prisma/client';
 import { SupplierPaymentsService } from './supplier-payments.service';
@@ -31,5 +40,21 @@ export class SupplierPaymentsController {
   @ApiOperation({ summary: 'Historique global des paiements fournisseurs' })
   findAll(@Query() query: QuerySupplierPaymentsDto) {
     return this.service.findAll(query);
+  }
+
+  @Get(':id')
+  @ApiOperation({ summary: "Détail d'un paiement fournisseur" })
+  findOne(@Param('id', new ParseUUIDPipe()) id: string) {
+    return this.service.findOne(id);
+  }
+
+  @Delete(':id')
+  @ApiOperation({
+    summary: 'Supprimer un paiement fournisseur',
+    description:
+      "Réajuste automatiquement le solde de la facture liée et supprime l'écriture de trésorerie associée.",
+  })
+  remove(@Param('id', new ParseUUIDPipe()) id: string) {
+    return this.service.remove(id);
   }
 }

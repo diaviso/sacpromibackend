@@ -182,4 +182,63 @@ export class CustomerPaymentsService {
 
     return paginate(items, total, query.page, query.limit);
   }
+
+  async findOne(id: string) {
+    const payment = await this.prisma.customerPayment.findUnique({
+      where: { id },
+      include: {
+        saleInvoice: {
+          select: {
+            id: true,
+            reference: true,
+            totalAmount: true,
+            amountPaid: true,
+            amountRemaining: true,
+            customer: { select: { id: true, name: true } },
+          },
+        },
+        account: { select: { id: true, name: true } },
+        createdBy: { select: { id: true, fullName: true } },
+      },
+    });
+    if (!payment) throw new NotFoundException('Paiement introuvable');
+    return payment;
+  }
+
+  /**
+   * Annule (hard-delete) un paiement client.
+   * - Réajuste amountPaid/amountRemaining/paymentStatus de la facture
+   * - Supprime l'écriture de trésorerie liée (cascade FK)
+   */
+  async remove(id: string) {
+    const payment = await this.prisma.customerPayment.findUnique({
+      where: { id },
+      include: { saleInvoice: true },
+    });
+    if (!payment) throw new NotFoundException('Paiement introuvable');
+
+    return this.prisma.$transaction(async (tx) => {
+      const invoice = payment.saleInvoice;
+      const newAmountPaid = Math.max(0, invoice.amountPaid - payment.amount);
+      const newAmountRemaining = invoice.totalAmount - newAmountPaid;
+      const newStatus: PaymentStatus =
+        newAmountPaid === 0
+          ? PaymentStatus.UNPAID
+          : newAmountRemaining <= 0
+            ? PaymentStatus.PAID
+            : PaymentStatus.PARTIALLY_PAID;
+
+      await tx.saleInvoice.update({
+        where: { id: invoice.id },
+        data: {
+          amountPaid: newAmountPaid,
+          amountRemaining: Math.max(0, newAmountRemaining),
+          paymentStatus: newStatus,
+        },
+      });
+
+      await tx.customerPayment.delete({ where: { id } });
+      return { message: 'Paiement supprimé — facture mise à jour' };
+    });
+  }
 }

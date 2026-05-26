@@ -4,14 +4,15 @@ import {
   Get,
   Param,
   ParseUUIDPipe,
+  Patch,
   Post,
   Query,
   Res,
 } from '@nestjs/common';
 import type { Response } from 'express';
-import { ApiBearerAuth, ApiOperation, ApiPropertyOptional, ApiTags } from '@nestjs/swagger';
+import { ApiBearerAuth, ApiOperation, ApiProperty, ApiPropertyOptional, ApiTags } from '@nestjs/swagger';
 import { PaymentStatus, SaleInvoiceType, SalePaymentMethod, UserRole } from '@prisma/client';
-import { IsDateString, IsEnum, IsOptional, IsUUID } from 'class-validator';
+import { IsDateString, IsEnum, IsOptional, IsString, IsUUID, MaxLength, MinLength } from 'class-validator';
 import { SalesService } from './sales.service';
 import { SalePdfService } from './sale-pdf.service';
 import { SaleEmailService } from './sale-email.service';
@@ -20,6 +21,14 @@ import { CreateCreditNoteDto } from './dto/create-credit-note.dto';
 import { PaginationDto } from '../common/dto/pagination.dto';
 import { Roles } from '../common/decorators/roles.decorator';
 import { CurrentUser, AuthenticatedUser } from '../common/decorators/current-user.decorator';
+
+class CancelSaleDto {
+  @ApiProperty({ description: "Motif d'annulation (minimum 3 caractères)" })
+  @IsString()
+  @MinLength(3)
+  @MaxLength(500)
+  reason!: string;
+}
 
 class QuerySalesDto extends PaginationDto {
   @ApiPropertyOptional({ enum: SaleInvoiceType })
@@ -130,5 +139,21 @@ export class SalesController {
     @CurrentUser() user: AuthenticatedUser,
   ) {
     return this.service.createCreditNote(id, dto, user.id);
+  }
+
+  @Patch(':id/cancel')
+  @Roles(UserRole.DIRECTOR)
+  @ApiOperation({
+    summary: 'Annuler une facture de vente (soft-delete)',
+    description:
+      "Marque la facture annulée + réintègre le stock via un mouvement d'ajustement. " +
+      'Refusé si paiements ou avoirs liés. Réservé au DIRECTOR.',
+  })
+  cancel(
+    @Param('id', new ParseUUIDPipe()) id: string,
+    @Body() dto: CancelSaleDto,
+    @CurrentUser() user: AuthenticatedUser,
+  ) {
+    return this.service.cancel(id, dto.reason, user.id);
   }
 }

@@ -17,7 +17,9 @@ import { FinishedProductsService } from './finished-products.service';
 import { CreateFinishedProductDto } from './dto/create-finished-product.dto';
 import { UpdateFinishedProductDto } from './dto/update-finished-product.dto';
 import { QueryFinishedProductsDto } from './dto/query-finished-products.dto';
+import { DeclareLossDto } from './dto/declare-loss.dto';
 import { Roles } from '../common/decorators/roles.decorator';
+import { CurrentUser, AuthenticatedUser } from '../common/decorators/current-user.decorator';
 
 @ApiTags('Finished Products')
 @ApiBearerAuth('JWT-auth')
@@ -97,6 +99,21 @@ export class FinishedProductsController {
     @Body() dto: UpdateFinishedProductDto,
   ) {
     return this.service.update(id, dto);
+  }
+
+  @Post(':id/loss')
+  @Roles(UserRole.DIRECTOR, UserRole.PRODUCTION_MANAGER, UserRole.OPERATOR)
+  @ApiOperation({
+    summary: 'Déclarer une perte/casse sur un produit fini',
+    description:
+      'Crée un mouvement LOSS qui décrémente le stock en FIFO. Motif obligatoire et tracé.',
+  })
+  declareLoss(
+    @Param('id', new ParseUUIDPipe()) id: string,
+    @Body() dto: DeclareLossDto,
+    @CurrentUser() user: AuthenticatedUser,
+  ) {
+    return this.service.declareLoss(id, dto, user.id);
   }
 
   @Patch(':id/deactivate')

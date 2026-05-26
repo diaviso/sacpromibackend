@@ -235,8 +235,11 @@ export class SalesService {
     paymentMethod?: SalePaymentMethod;
     from?: string;
     to?: string;
+    includeDeleted?: boolean;
   }) {
     const where: Prisma.SaleInvoiceWhereInput = {};
+    // Par défaut, exclure les factures annulées (soft-delete)
+    if (!filters.includeDeleted) where.deletedAt = null;
     if (filters.type) where.type = filters.type;
     if (filters.paymentStatus) where.paymentStatus = filters.paymentStatus;
     if (filters.customerId) where.customerId = filters.customerId;
@@ -399,6 +402,114 @@ export class SalesService {
       });
 
       return creditNote;
+    });
+  }
+
+  /**
+   * Annulation totale d'une facture de vente (soft-delete).
+   *
+   * Effets :
+   * - Marque la facture `deletedAt` + `deletedReason` (préserve l'audit trail)
+   * - Crée un mouvement de stock ADJUSTMENT (+qty) pour chaque ligne (réintègre le stock)
+   * - Met à jour le `currentStock` des produits concernés
+   * - Si la facture était liée à une commande client, décrémente la quantité livrée
+   *
+   * Refus si :
+   * - La facture a déjà des paiements enregistrés (annuler d'abord les paiements)
+   * - La facture a déjà des avoirs (notes de crédit) liés
+   * - La facture est déjà annulée
+   *
+   * Note : ne touche PAS au prix moyen pondéré du produit (les lots originaux
+   * ne sont pas recréés, on fait juste un mouvement d'ajustement). Pour un
+   * retour partiel avec recréation de lot, utiliser `createCreditNote` à la place.
+   */
+  async cancel(
+    saleInvoiceId: string,
+    reason: string,
+    userId: string,
+  ): Promise<{ message: string; invoiceId: string }> {
+    if (!reason || reason.trim().length < 3) {
+      throw new BadRequestException('Motif d\'annulation obligatoire (minimum 3 caractères)');
+    }
+
+    const invoice = await this.prisma.saleInvoice.findUnique({
+      where: { id: saleInvoiceId },
+      include: { items: true, payments: true, creditNotes: true },
+    });
+    if (!invoice) {
+      throw new NotFoundException(`Facture ${saleInvoiceId} introuvable`);
+    }
+    if (invoice.deletedAt) {
+      throw new BadRequestException('Facture déjà annulée');
+    }
+    if (invoice.payments.length > 0) {
+      throw new BadRequestException(
+        `Impossible : ${invoice.payments.length} paiement(s) enregistré(s). Supprimez d'abord les paiements.`,
+      );
+    }
+    if (invoice.creditNotes.length > 0) {
+      throw new BadRequestException(
+        `Impossible : ${invoice.creditNotes.length} avoir(s) lié(s) à cette facture.`,
+      );
+    }
+
+    return this.prisma.$transaction(async (tx) => {
+      // Pour chaque ligne, créer un mouvement d'ajustement (+ quantité) qui réintègre le stock
+      for (const item of invoice.items) {
+        await tx.finishedStockMovement.create({
+          data: {
+            finishedProductId: item.finishedProductId,
+            lotId: item.finishedLotId,
+            type: FinishedStockMovementType.ADJUSTMENT,
+            quantity: item.quantity,
+            referenceType: StockReferenceType.SALE_INVOICE,
+            referenceId: invoice.id,
+            reason: `Annulation facture ${invoice.reference} : ${reason}`,
+            createdById: userId,
+          },
+        });
+        await tx.finishedProduct.update({
+          where: { id: item.finishedProductId },
+          data: { currentStock: { increment: item.quantity } },
+        });
+        // Si on a tracé le lot, on réincrémente sa qty restante
+        if (item.finishedLotId) {
+          await tx.finishedProductLot.update({
+            where: { id: item.finishedLotId },
+            data: {
+              remainingQuantity: { increment: item.quantity },
+              status: LotStatus.ACTIVE, // au cas où il était DEPLETED
+            },
+          });
+        }
+      }
+
+      // Si liée à une commande client, ajuster la quantité livrée (décrément)
+      if (invoice.customerOrderId) {
+        for (const item of invoice.items) {
+          await tx.customerOrderItem.updateMany({
+            where: {
+              customerOrderId: invoice.customerOrderId,
+              finishedProductId: item.finishedProductId,
+            },
+            data: { quantityDelivered: { decrement: item.quantity } },
+          });
+        }
+      }
+
+      // Soft-delete de la facture
+      await tx.saleInvoice.update({
+        where: { id: saleInvoiceId },
+        data: {
+          deletedAt: new Date(),
+          deletedReason: reason.trim(),
+        },
+      });
+
+      this.logger.warn(
+        `Facture ${invoice.reference} annulée par user ${userId} — motif : ${reason}`,
+      );
+      return { message: 'Facture annulée — stock réintégré', invoiceId: saleInvoiceId };
     });
   }
 }
