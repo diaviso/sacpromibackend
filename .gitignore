@@ -47,6 +47,9 @@ backups/
 *.sql
 *.sql.gz
 *.dump
+
+# Exception : on garde les migrations Prisma versionnées (indispensable pour le déploiement)
+!prisma/migrations/**/migration.sql
 *.bak
 
 # Misc
