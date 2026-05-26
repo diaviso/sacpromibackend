@@ -261,21 +261,23 @@ model User {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  purchaseOrdersCreated    PurchaseOrder[]
-  purchaseInvoicesCreated  PurchaseInvoice[]
-  supplierPaymentsCreated  SupplierPayment[]
-  stockMovementsCreated    RawStockMovement[]
-  inventoriesCreated       Inventory[]
-  conservationCostsCreated ConservationCost[]
-  productionOrdersCreated  ProductionOrder[]
-  finishedStockMovements   FinishedStockMovement[]
-  breedingBatchesCreated   BreedingBatch[]
-  breedingRecordsCreated   BreedingRecord[]
-  customerOrdersCreated    CustomerOrder[]
-  saleInvoicesCreated      SaleInvoice[]
-  customerPaymentsCreated  CustomerPayment[]
-  expensesCreated          Expense[]
-  passwordResetTokens      PasswordResetToken[]
+  purchaseOrdersCreated       PurchaseOrder[]
+  purchaseInvoicesCreated     PurchaseInvoice[]
+  supplierPaymentsCreated     SupplierPayment[]
+  stockMovementsCreated       RawStockMovement[]
+  inventoriesCreated          Inventory[]
+  conservationCostsCreated    ConservationCost[]
+  productionOrdersCreated     ProductionOrder[]
+  finishedStockMovements      FinishedStockMovement[]
+  breedingBatchesCreated      BreedingBatch[]
+  breedingRecordsCreated      BreedingRecord[]
+  customerOrdersCreated       CustomerOrder[]
+  saleInvoicesCreated         SaleInvoice[]
+  customerPaymentsCreated     CustomerPayment[]
+  expensesCreated             Expense[]
+  passwordResetTokens         PasswordResetToken[]
+  breedingWeighingsCreated    BreedingWeighing[]
+  breedingVaccinationsCreated BreedingVaccination[]
 
   // Sprint 7
   accountsCreated         Account[]
@@ -309,6 +311,25 @@ model PasswordResetToken {
   @@index([userId])
   @@index([expiresAt])
   @@map("password_reset_tokens")
+}
+
+// =====================================================
+// REVOKED TOKEN (blacklist pour logout immédiat)
+// =====================================================
+
+model RevokedToken {
+  id        String   @id @default(uuid())
+  jti       String   @unique // identifiant unique du token (sub.iat encodé)
+  userId    String?
+  type      String // "access" ou "refresh"
+  expiresAt DateTime // date d'expiration du token : permet le nettoyage périodique
+  reason    String? // "logout", "password_change", "admin_revoke"
+  createdAt DateTime @default(now())
+
+  @@index([jti])
+  @@index([userId])
+  @@index([expiresAt])
+  @@map("revoked_tokens")
 }
 
 // =====================================================
@@ -402,6 +423,8 @@ model PurchaseInvoice {
   amountRemaining       Int           @default(0)
   totalTransportCost    Int           @default(0)
   scanUrl               String?
+  deletedAt             DateTime? // soft-delete : facture annulée mais traçabilité préservée
+  deletedReason         String?       @db.Text
   createdById           String
   createdAt             DateTime      @default(now())
   updatedAt             DateTime      @updatedAt
@@ -636,14 +659,15 @@ model FinishedProduct {
   createdAt      DateTime                @default(now())
   updatedAt      DateTime                @updatedAt
 
-  formulas           Formula[]
-  productionOrders   ProductionOrder[]
-  lots               FinishedProductLot[]
-  movements          FinishedStockMovement[]
-  inventoryItems     InventoryItem[]
-  customerOrderItems CustomerOrderItem[]
-  saleInvoiceItems   SaleInvoiceItem[]
-  priceHistory       FinishedProductPriceHistory[]
+  formulas              Formula[]
+  productionOrders      ProductionOrder[]
+  lots                  FinishedProductLot[]
+  movements             FinishedStockMovement[]
+  inventoryItems        InventoryItem[]
+  customerOrderItems    CustomerOrderItem[]
+  saleInvoiceItems      SaleInvoiceItem[]
+  priceHistory          FinishedProductPriceHistory[]
+  breedingFeedingPhases BreedingFeedingPhase[]
 
   @@index([code])
   @@index([category])
@@ -813,18 +837,131 @@ model BreedingBatch {
   costPerHead   Int                 @default(0)
   slaughterCost Int                 @default(0)
   note          String?             @db.Text
-  createdById   String
-  createdAt     DateTime            @default(now())
-  updatedAt     DateTime            @updatedAt
 
-  createdBy           User                 @relation(fields: [createdById], references: [id])
+  // Pilotage zootechnique
+  targetWeightGrams      Int     @default(2000) // poids cible commercial (en grammes)
+  targetCycleDays        Int     @default(45) // durée cible du cycle (jours)
+  mortalityAlertPercent  Decimal @default(5) @db.Decimal(5, 2) // seuil d'alerte mortalité (%)
+  expectedSalePricePerKg Int     @default(0) // prix de vente attendu par kg vif (FCFA)
+
+  createdById String
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  createdBy           User                   @relation(fields: [createdById], references: [id])
   records             BreedingRecord[]
+  weighings           BreedingWeighing[]
+  vaccinations        BreedingVaccination[]
+  feedingPhases       BreedingFeedingPhase[]
   finishedProductLots FinishedProductLot[]
 
   @@index([status])
   @@index([startDate])
   @@index([reference])
   @@map("breeding_batches")
+}
+
+// =====================================================
+// BREEDING — Pesées par échantillonnage
+// =====================================================
+
+model BreedingWeighing {
+  id                 String   @id @default(uuid())
+  breedingBatchId    String
+  weighingDate       DateTime
+  ageDays            Int // âge de la bande au moment de la pesée
+  sampleSize         Int // nombre de poulets pesés
+  averageWeightGrams Int // poids moyen calculé sur l'échantillon
+  minWeightGrams     Int? // poids minimum dans l'échantillon
+  maxWeightGrams     Int? // poids maximum dans l'échantillon
+  uniformityPercent  Decimal? @db.Decimal(5, 2) // % poulets dans ±10% de la moyenne
+  observations       String?  @db.Text
+  createdById        String
+  createdAt          DateTime @default(now())
+
+  breedingBatch BreedingBatch @relation(fields: [breedingBatchId], references: [id], onDelete: Cascade)
+  createdBy     User          @relation(fields: [createdById], references: [id])
+
+  @@index([breedingBatchId])
+  @@index([weighingDate])
+  @@map("breeding_weighings")
+}
+
+// =====================================================
+// BREEDING — Programme vaccinal & sanitaire
+// =====================================================
+
+enum VaccinationRoute {
+  EYE_DROP // goutte oculaire
+  DRINKING_WATER // eau de boisson
+  INJECTION // sous-cutanée ou intramusculaire
+  SPRAY // pulvérisation
+  WING_WEB // ailette
+}
+
+enum VaccinationStatus {
+  PLANNED // planifié
+  DONE // effectué
+  SKIPPED // omis (avec raison)
+  OVERDUE // dépassé (auto-calculé)
+}
+
+model BreedingVaccination {
+  id              String            @id @default(uuid())
+  breedingBatchId String
+  vaccineName     String // ex: Newcastle (HB1), Gumboro (D78), Marek
+  targetAgeDays   Int // jour d'âge prévu pour la vaccination
+  plannedDate     DateTime // date prévue (calculée à partir de startDate + targetAgeDays)
+  actualDate      DateTime? // date effective si DONE
+  dose            String? // ex: "0,5 mL par poulet"
+  route           VaccinationRoute
+  supplier        String? // fournisseur / vétérinaire
+  batchNumber     String? // lot du vaccin
+  cost            Int               @default(0)
+  status          VaccinationStatus @default(PLANNED)
+  skipReason      String?           @db.Text
+  observations    String?           @db.Text
+  createdById     String
+  createdAt       DateTime          @default(now())
+  updatedAt       DateTime          @updatedAt
+
+  breedingBatch BreedingBatch @relation(fields: [breedingBatchId], references: [id], onDelete: Cascade)
+  createdBy     User          @relation(fields: [createdById], references: [id])
+
+  @@index([breedingBatchId])
+  @@index([status])
+  @@index([plannedDate])
+  @@map("breeding_vaccinations")
+}
+
+// =====================================================
+// BREEDING — Programme alimentaire (phases)
+// =====================================================
+
+enum FeedingPhase {
+  STARTER // démarrage (0-10j typique)
+  GROWER // croissance (11-25j typique)
+  FINISHER // finition (26-45j typique)
+  WITHDRAWAL // retrait — sans antibiotique avant abattage (optionnel)
+}
+
+model BreedingFeedingPhase {
+  id                    String       @id @default(uuid())
+  breedingBatchId       String
+  phase                 FeedingPhase
+  startDay              Int // jour de début (inclus)
+  endDay                Int // jour de fin (inclus)
+  feedFinishedProductId String? // produit fini aliment associé
+  dailyFeedPerHeadGrams Int // quantité théorique conseillée (g/poulet/jour)
+  technicalNote         String?      @db.Text
+  createdAt             DateTime     @default(now())
+
+  breedingBatch       BreedingBatch    @relation(fields: [breedingBatchId], references: [id], onDelete: Cascade)
+  feedFinishedProduct FinishedProduct? @relation(fields: [feedFinishedProductId], references: [id])
+
+  @@unique([breedingBatchId, phase])
+  @@index([breedingBatchId])
+  @@map("breeding_feeding_phases")
 }
 
 model BreedingRecord {
@@ -937,6 +1074,8 @@ model SaleInvoice {
   amountRemaining Int               @default(0)
   note            String?           @db.Text
   parentInvoiceId String? // pour les credit notes
+  deletedAt       DateTime? // soft-delete : facture annulée mais traçabilité préservée
+  deletedReason   String?           @db.Text
   createdById     String
   createdAt       DateTime          @default(now())
   updatedAt       DateTime          @updatedAt

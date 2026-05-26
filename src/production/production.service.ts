@@ -99,13 +99,25 @@ export class ProductionService {
       if (query.from) where.productionDate.gte = new Date(query.from);
       if (query.to) where.productionDate.lte = new Date(query.to);
     }
+    if (query.search && query.search.trim()) {
+      const term = query.search.trim();
+      where.OR = [
+        { reference: { contains: term, mode: 'insensitive' } },
+        { note: { contains: term, mode: 'insensitive' } },
+        { finishedProduct: { name: { contains: term, mode: 'insensitive' } } },
+      ];
+    }
+
+    const sortBy = query.sortBy ?? 'productionDate';
+    const sortOrder = query.sortOrder ?? 'desc';
+    const orderBy: Prisma.ProductionOrderOrderByWithRelationInput = { [sortBy]: sortOrder };
 
     const [items, total] = await this.prisma.$transaction([
       this.prisma.productionOrder.findMany({
         where,
         skip: query.skip,
         take: query.take,
-        orderBy: { productionDate: 'desc' },
+        orderBy,
         include: {
           finishedProduct: { select: { id: true, code: true, name: true, unit: true } },
           formula: { select: { id: true, name: true, version: true, productionUnit: true } },

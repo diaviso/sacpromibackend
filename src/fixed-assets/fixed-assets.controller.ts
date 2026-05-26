@@ -39,6 +39,7 @@ import {
 import { FixedAssetsService } from './fixed-assets.service';
 import { PaginationDto } from '../common/dto/pagination.dto';
 import { Roles } from '../common/decorators/roles.decorator';
+import { AnyAuthenticated } from '../common/decorators/any-authenticated.decorator';
 import {
   AuthenticatedUser,
   CurrentUser,
@@ -162,6 +163,14 @@ class RunDepreciationDto {
   month!: number;
 }
 
+export const FIXED_ASSET_SORT_FIELDS = [
+  'acquisitionDate',
+  'acquisitionCost',
+  'name',
+  'reference',
+] as const;
+export type FixedAssetSortField = (typeof FIXED_ASSET_SORT_FIELDS)[number];
+
 class QueryFixedAssetsDto extends PaginationDto {
   @ApiPropertyOptional({ enum: FixedAssetCategory })
   @IsOptional()
@@ -172,6 +181,24 @@ class QueryFixedAssetsDto extends PaginationDto {
   @IsOptional()
   @IsEnum(FixedAssetStatus)
   status?: FixedAssetStatus;
+
+  @ApiPropertyOptional({
+    description: 'Recherche : référence, nom, n° de série, emplacement ou note',
+  })
+  @IsOptional()
+  @IsString()
+  @MaxLength(120)
+  search?: string;
+
+  @ApiPropertyOptional({ enum: FIXED_ASSET_SORT_FIELDS, default: 'acquisitionDate' })
+  @IsOptional()
+  @IsIn(FIXED_ASSET_SORT_FIELDS as unknown as string[])
+  sortBy?: FixedAssetSortField;
+
+  @ApiPropertyOptional({ enum: ['asc', 'desc'], default: 'desc' })
+  @IsOptional()
+  @IsIn(['asc', 'desc'])
+  sortOrder?: 'asc' | 'desc';
 }
 
 @ApiTags('Fixed Assets')
@@ -188,6 +215,7 @@ export class FixedAssetsController {
   }
 
   @Get()
+  @AnyAuthenticated()
   @ApiOperation({
     summary: 'Liste paginée des immobilisations (avec valeur nette comptable)',
   })
@@ -196,6 +224,7 @@ export class FixedAssetsController {
   }
 
   @Get(':id')
+  @AnyAuthenticated()
   @ApiOperation({ summary: 'Détail immobilisation + historique amortissements' })
   findOne(@Param('id') id: string) {
     return this.service.findOne(id);

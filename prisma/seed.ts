@@ -63,6 +63,9 @@ async function main() {
   await prisma.customerOrderItem.deleteMany();
   await prisma.customerOrder.deleteMany();
   await prisma.customer.deleteMany();
+  await prisma.breedingWeighing.deleteMany();
+  await prisma.breedingVaccination.deleteMany();
+  await prisma.breedingFeedingPhase.deleteMany();
   await prisma.breedingRecord.deleteMany();
   await prisma.breedingBatch.deleteMany();
   await prisma.finishedStockMovement.deleteMany();
@@ -83,36 +86,94 @@ async function main() {
   await prisma.purchaseOrder.deleteMany();
   await prisma.rawMaterial.deleteMany();
   await prisma.supplier.deleteMany();
+  await prisma.revokedToken.deleteMany();
+  await prisma.passwordResetToken.deleteMany();
   await prisma.user.deleteMany();
   await prisma.sequenceCounter.deleteMany();
 
   console.log('🧹 Tables nettoyées');
 
-  // === Utilisateurs ===
-  const directorPassword = await bcrypt.hash('Admin123!', SALT_ROUNDS);
-  const operatorPassword = await bcrypt.hash('Oper123!', SALT_ROUNDS);
+  // === Utilisateurs (un par rôle) ===
+  const adminHash = await bcrypt.hash('Admin123!', SALT_ROUNDS);
+  const standardHash = await bcrypt.hash('Pass123!', SALT_ROUNDS);
 
   const director = await prisma.user.create({
     data: {
       email: 'admin@sacpromi.sn',
-      password: directorPassword,
+      password: adminHash,
       fullName: 'Mamadou Diop',
       phone: '+221 77 100 00 01',
       role: UserRole.DIRECTOR,
     },
   });
 
+  const productionManager = await prisma.user.create({
+    data: {
+      email: 'production@sacpromi.sn',
+      password: standardHash,
+      fullName: 'Aïssatou Ndiaye',
+      phone: '+221 77 100 00 03',
+      role: UserRole.PRODUCTION_MANAGER,
+    },
+  });
+
+  const breedingManager = await prisma.user.create({
+    data: {
+      email: 'elevage@sacpromi.sn',
+      password: standardHash,
+      fullName: 'Cheikh Tidiane Faye',
+      phone: '+221 77 100 00 04',
+      role: UserRole.BREEDING_MANAGER,
+    },
+  });
+
+  const salesManager = await prisma.user.create({
+    data: {
+      email: 'commercial@sacpromi.sn',
+      password: standardHash,
+      fullName: 'Fatou Sow',
+      phone: '+221 77 100 00 05',
+      role: UserRole.SALES_MANAGER,
+    },
+  });
+
   const operator = await prisma.user.create({
     data: {
       email: 'operateur@sacpromi.sn',
-      password: operatorPassword,
+      password: await bcrypt.hash('Oper123!', SALT_ROUNDS),
       fullName: 'Ibrahima Sall',
       phone: '+221 77 100 00 02',
       role: UserRole.OPERATOR,
     },
   });
 
-  console.log(`👤 Utilisateurs créés : ${director.email}, ${operator.email}`);
+  // 2 opérateurs additionnels (terrain) avec un compte désactivé pour tester le RBAC + le soft-delete
+  await prisma.user.create({
+    data: {
+      email: 'oper2@sacpromi.sn',
+      password: standardHash,
+      fullName: 'Awa Mbaye',
+      phone: '+221 77 100 00 06',
+      role: UserRole.OPERATOR,
+    },
+  });
+  await prisma.user.create({
+    data: {
+      email: 'ancien.commercial@sacpromi.sn',
+      password: standardHash,
+      fullName: 'Moustapha Gueye (ancien)',
+      phone: '+221 77 100 00 07',
+      role: UserRole.SALES_MANAGER,
+      isActive: false,
+    },
+  });
+
+  console.log('👤 7 utilisateurs créés (1 directeur, 3 responsables, 2 opérateurs, 1 désactivé)');
+  console.log(`   - ${director.email} (Directeur)`);
+  console.log(`   - ${productionManager.email} (Resp. Production)`);
+  console.log(`   - ${breedingManager.email} (Resp. Élevage)`);
+  console.log(`   - ${salesManager.email} (Resp. Commercial)`);
+  console.log(`   - ${operator.email} (Opérateur)`);
 
   // === Sprint 7 — Comptes de trésorerie par défaut ===
   const cashAccount = await prisma.account.create({
@@ -1142,8 +1203,84 @@ async function main() {
       totalVetCost,
       totalCost,
       costPerHead: Math.round(totalCost / 985),
+      // Paramètres de pilotage zootechnique
+      targetWeightGrams: 2200,
+      targetCycleDays: 45,
+      mortalityAlertPercent: 5,
+      expectedSalePricePerKg: 2200,
     },
   });
+
+  // Pesées par échantillonnage (bande active)
+  const startDateActive = breedingActive.startDate;
+  const weighings = [
+    { day: 7, weight: 175, sample: 30, min: 155, max: 200 },
+    { day: 14, weight: 445, sample: 30, min: 410, max: 490 },
+    { day: 21, weight: 870, sample: 30, min: 800, max: 945 },
+  ];
+  for (const w of weighings) {
+    const date = new Date(startDateActive);
+    date.setDate(date.getDate() + w.day);
+    await prisma.breedingWeighing.create({
+      data: {
+        breedingBatchId: breedingActive.id,
+        weighingDate: date,
+        ageDays: w.day,
+        sampleSize: w.sample,
+        averageWeightGrams: w.weight,
+        minWeightGrams: w.min,
+        maxWeightGrams: w.max,
+        uniformityPercent: 85,
+        createdById: director.id,
+      },
+    });
+  }
+
+  // Programme vaccinal (bande active) — Cobb 500 standard
+  const vaccProgram = [
+    { name: 'Newcastle + Bronchite (HB1 + IB)', age: 1, route: 'SPRAY' as const, dose: 'Pulvérisation au couvoir', cost: 5000, status: 'DONE' as const },
+    { name: 'Gumboro (D78)', age: 10, route: 'DRINKING_WATER' as const, dose: 'Eau de boisson 1-2h', cost: 8000, status: 'DONE' as const },
+    { name: 'Newcastle rappel (Lasota)', age: 14, route: 'DRINKING_WATER' as const, dose: 'Eau de boisson 1-2h', cost: 6500, status: 'DONE' as const },
+    { name: 'Newcastle rappel 2 (Lasota)', age: 21, route: 'DRINKING_WATER' as const, dose: 'Eau de boisson 1-2h', cost: 6500, status: 'PLANNED' as const },
+  ];
+  for (const v of vaccProgram) {
+    const planned = new Date(startDateActive);
+    planned.setDate(planned.getDate() + v.age);
+    const actual = v.status === 'DONE' ? new Date(planned) : null;
+    await prisma.breedingVaccination.create({
+      data: {
+        breedingBatchId: breedingActive.id,
+        vaccineName: v.name,
+        targetAgeDays: v.age,
+        plannedDate: planned,
+        actualDate: actual,
+        route: v.route,
+        dose: v.dose,
+        cost: v.cost,
+        status: v.status,
+        supplier: 'Vétérinaire Dr. Niang',
+        createdById: director.id,
+      },
+    });
+  }
+
+  // Programme alimentaire (bande active)
+  const feedingPhases = [
+    { phase: 'STARTER' as const, startDay: 0, endDay: 10, daily: 25 },
+    { phase: 'GROWER' as const, startDay: 11, endDay: 24, daily: 95 },
+    { phase: 'FINISHER' as const, startDay: 25, endDay: 45, daily: 165 },
+  ];
+  for (const p of feedingPhases) {
+    await prisma.breedingFeedingPhase.create({
+      data: {
+        breedingBatchId: breedingActive.id,
+        phase: p.phase,
+        startDay: p.startDay,
+        endDay: p.endDay,
+        dailyFeedPerHeadGrams: p.daily,
+      },
+    });
+  }
 
   // Bande clôturée
   const breedingClosed = await prisma.breedingBatch.create({
@@ -1402,11 +1539,159 @@ async function main() {
 
   console.log(`💸 ${expensesData.length} dépenses Avril 2026 enregistrées (dont 2 récurrentes : salaires + loyer)`);
 
+  // ========================================
+  // HISTORIQUE 6 MOIS : pour dashboard riche
+  // ========================================
+  console.log('📈 Génération de 6 mois d\'historique (Nov 2025 → Avr 2026)...');
+
+  const HIST_MONTHS = [
+    { year: 2025, month: 11, label: 'Nov 2025' },
+    { year: 2025, month: 12, label: 'Déc 2025' },
+    { year: 2026, month: 1, label: 'Jan 2026' },
+    { year: 2026, month: 2, label: 'Fév 2026' },
+    { year: 2026, month: 3, label: 'Mar 2026' },
+  ];
+
+  // Variabilité saisonnière : ventes plus fortes décembre/janvier (fêtes)
+  const SEASONAL: Record<number, number> = { 11: 0.9, 12: 1.3, 1: 1.2, 2: 0.85, 3: 1.0 };
+
+  const allCustomers = await prisma.customer.findMany({ where: { isWalkIn: false } });
+  const allFinishedProducts = await prisma.finishedProduct.findMany({ where: { isActive: true } });
+
+  let totalHistInvoices = 0;
+  let totalHistExpenses = 0;
+
+  for (const { year, month, label } of HIST_MONTHS) {
+    const factor = SEASONAL[month] ?? 1.0;
+
+    // --- Ventes du mois (3 à 5 factures) ---
+    const numSales = 3 + Math.floor(Math.random() * 3);
+    for (let i = 0; i < numSales; i++) {
+      const day = 5 + Math.floor(Math.random() * 22);
+      const customer = allCustomers[Math.floor(Math.random() * allCustomers.length)];
+      const isWholesale = customer.priceCategory === 'WHOLESALE';
+
+      // 1 à 3 produits par facture
+      const numItems = 1 + Math.floor(Math.random() * 3);
+      const products = [...allFinishedProducts].sort(() => Math.random() - 0.5).slice(0, numItems);
+
+      let totalAmount = 0;
+      const items = products.map((p) => {
+        const baseQty = isWholesale ? 50 + Math.floor(Math.random() * 200) : 10 + Math.floor(Math.random() * 40);
+        const qty = Math.round(baseQty * factor);
+        const unitPrice = isWholesale ? p.wholesalePrice : p.retailPrice;
+        const lineAmount = qty * unitPrice;
+        totalAmount += lineAmount;
+        return {
+          finishedProductId: p.id,
+          productName: p.name,
+          quantity: qty,
+          unitPrice,
+          lineAmount,
+        };
+      });
+
+      const reference = await nextRef(isWholesale ? 'FAC' : 'REC', year);
+      const paymentMethod = isWholesale
+        ? (Math.random() > 0.5 ? SalePaymentMethod.CREDIT : SalePaymentMethod.TRANSFER)
+        : (Math.random() > 0.5 ? SalePaymentMethod.CASH : SalePaymentMethod.WAVE);
+      const paymentStatus = paymentMethod === SalePaymentMethod.CREDIT
+        ? (Math.random() > 0.5 ? PaymentStatus.UNPAID : PaymentStatus.PARTIALLY_PAID)
+        : PaymentStatus.PAID;
+      const amountPaid = paymentStatus === PaymentStatus.PAID
+        ? totalAmount
+        : paymentStatus === PaymentStatus.PARTIALLY_PAID
+          ? Math.round(totalAmount * 0.6)
+          : 0;
+
+      await prisma.saleInvoice.create({
+        data: {
+          reference,
+          type: isWholesale ? SaleInvoiceType.INVOICE : SaleInvoiceType.RECEIPT,
+          customerId: customer.id,
+          invoiceDate: new Date(year, month - 1, day),
+          totalAmount,
+          paymentMethod,
+          paymentStatus,
+          amountPaid,
+          amountRemaining: totalAmount - amountPaid,
+          createdById: salesManager.id,
+          items: { create: items },
+        },
+      });
+      totalHistInvoices++;
+    }
+
+    // --- Dépenses récurrentes (salaires + loyer) ---
+    const salaireCat = createdCategories['Salaires'];
+    const loyerCat = createdCategories['Loyer'];
+    if (salaireCat) {
+      await prisma.expense.create({
+        data: {
+          amount: 850000,
+          categoryId: salaireCat,
+          activity: ExpenseActivity.GENERAL,
+          expenseDate: new Date(year, month - 1, 28),
+          description: `Salaires ${label}`,
+          status: ExpenseStatus.CONFIRMED,
+          createdById: director.id,
+        },
+      });
+      totalHistExpenses++;
+    }
+    if (loyerCat) {
+      await prisma.expense.create({
+        data: {
+          amount: 200000,
+          categoryId: loyerCat,
+          activity: ExpenseActivity.GENERAL,
+          expenseDate: new Date(year, month - 1, 1),
+          description: `Loyer atelier ${label}`,
+          status: ExpenseStatus.CONFIRMED,
+          createdById: director.id,
+        },
+      });
+      totalHistExpenses++;
+    }
+
+    // --- 2 à 4 dépenses variables ---
+    const variableExpenses = [
+      { amount: 40000 + Math.floor(Math.random() * 30000), cat: 'Électricité', activity: ExpenseActivity.PRODUCTION, desc: `Facture SENELEC ${label}` },
+      { amount: 18000 + Math.floor(Math.random() * 12000), cat: 'Carburant', activity: ExpenseActivity.PRODUCTION, desc: `Carburant ${label}` },
+      { amount: 8000 + Math.floor(Math.random() * 8000), cat: 'Vétérinaire', activity: ExpenseActivity.BREEDING, desc: `Vaccins ${label}` },
+      { amount: 12000 + Math.floor(Math.random() * 8000), cat: 'Transport / Logistique', activity: ExpenseActivity.COMMERCIAL, desc: `Livraisons ${label}` },
+    ];
+    for (const exp of variableExpenses.slice(0, 2 + Math.floor(Math.random() * 3))) {
+      const catId = createdCategories[exp.cat];
+      if (!catId) continue;
+      await prisma.expense.create({
+        data: {
+          amount: exp.amount,
+          categoryId: catId,
+          activity: exp.activity,
+          expenseDate: new Date(year, month - 1, 10 + Math.floor(Math.random() * 15)),
+          description: exp.desc,
+          status: ExpenseStatus.CONFIRMED,
+          createdById: director.id,
+        },
+      });
+      totalHistExpenses++;
+    }
+  }
+
+  console.log(`📊 ${totalHistInvoices} factures + ${totalHistExpenses} dépenses historiques créées`);
+
   console.log('---');
   console.log('✅ Seed terminé avec succès');
-  console.log('Comptes :');
-  console.log('  Directeur : admin@sacpromi.sn / Admin123!');
-  console.log('  Opérateur : operateur@sacpromi.sn / Oper123!');
+  console.log('');
+  console.log('🔑 Comptes de connexion :');
+  console.log('  Directeur          admin@sacpromi.sn        / Admin123!');
+  console.log('  Resp. Production   production@sacpromi.sn   / Pass123!');
+  console.log('  Resp. Élevage      elevage@sacpromi.sn      / Pass123!');
+  console.log('  Resp. Commercial   commercial@sacpromi.sn   / Pass123!');
+  console.log('  Opérateur          operateur@sacpromi.sn    / Oper123!');
+  console.log('  Opérateur 2        oper2@sacpromi.sn        / Pass123!');
+  console.log('  (désactivé)        ancien.commercial@...    / Pass123!');
 }
 
 main()

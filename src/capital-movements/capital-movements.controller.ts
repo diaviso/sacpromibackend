@@ -18,6 +18,7 @@ import { Type } from 'class-transformer';
 import {
   IsDateString,
   IsEnum,
+  IsIn,
   IsInt,
   IsOptional,
   IsString,
@@ -70,6 +71,12 @@ class CreateCapitalMovementDto {
   documentUrl?: string;
 }
 
+export const CAPITAL_MOVEMENT_SORT_FIELDS = [
+  'movementDate',
+  'amount',
+] as const;
+export type CapitalMovementSortField = (typeof CAPITAL_MOVEMENT_SORT_FIELDS)[number];
+
 class QueryCapitalMovementsDto extends PaginationDto {
   @ApiPropertyOptional({ enum: CapitalMovementType })
   @IsOptional()
@@ -90,6 +97,24 @@ class QueryCapitalMovementsDto extends PaginationDto {
   @IsOptional()
   @IsDateString()
   to?: string;
+
+  @ApiPropertyOptional({
+    description: 'Recherche : référence, nom du tiers ou description',
+  })
+  @IsOptional()
+  @IsString()
+  @MaxLength(120)
+  search?: string;
+
+  @ApiPropertyOptional({ enum: CAPITAL_MOVEMENT_SORT_FIELDS, default: 'movementDate' })
+  @IsOptional()
+  @IsIn(CAPITAL_MOVEMENT_SORT_FIELDS as unknown as string[])
+  sortBy?: CapitalMovementSortField;
+
+  @ApiPropertyOptional({ enum: ['asc', 'desc'], default: 'desc' })
+  @IsOptional()
+  @IsIn(['asc', 'desc'])
+  sortOrder?: 'asc' | 'desc';
 }
 
 @ApiTags('Capital Movements')

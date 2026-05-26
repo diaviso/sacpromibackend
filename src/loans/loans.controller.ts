@@ -18,6 +18,7 @@ import { Type } from 'class-transformer';
 import {
   IsDateString,
   IsEnum,
+  IsIn,
   IsInt,
   IsNumber,
   IsOptional,
@@ -31,6 +32,7 @@ import {
 import { LoansService } from './loans.service';
 import { PaginationDto } from '../common/dto/pagination.dto';
 import { Roles } from '../common/decorators/roles.decorator';
+import { AnyAuthenticated } from '../common/decorators/any-authenticated.decorator';
 import {
   AuthenticatedUser,
   CurrentUser,
@@ -129,11 +131,37 @@ class CreateLoanPaymentDto {
   note?: string;
 }
 
+export const LOAN_SORT_FIELDS = [
+  'startDate',
+  'principalAmount',
+  'remainingPrincipal',
+  'reference',
+] as const;
+export type LoanSortField = (typeof LOAN_SORT_FIELDS)[number];
+
 class QueryLoansDto extends PaginationDto {
   @ApiPropertyOptional({ enum: LoanStatus })
   @IsOptional()
   @IsEnum(LoanStatus)
   status?: LoanStatus;
+
+  @ApiPropertyOptional({
+    description: 'Recherche : référence, nom du prêteur ou note',
+  })
+  @IsOptional()
+  @IsString()
+  @MaxLength(120)
+  search?: string;
+
+  @ApiPropertyOptional({ enum: LOAN_SORT_FIELDS, default: 'startDate' })
+  @IsOptional()
+  @IsIn(LOAN_SORT_FIELDS as unknown as string[])
+  sortBy?: LoanSortField;
+
+  @ApiPropertyOptional({ enum: ['asc', 'desc'], default: 'desc' })
+  @IsOptional()
+  @IsIn(['asc', 'desc'])
+  sortOrder?: 'asc' | 'desc';
 }
 
 class QueryLoanPaymentsDto extends PaginationDto {
@@ -170,18 +198,21 @@ export class LoansController {
   }
 
   @Get()
+  @AnyAuthenticated()
   @ApiOperation({ summary: 'Liste paginée des prêts' })
   findAll(@Query() query: QueryLoansDto) {
     return this.service.findAll(query, query);
   }
 
   @Get('payments')
+  @AnyAuthenticated()
   @ApiOperation({ summary: 'Liste paginée des remboursements de prêts' })
   listPayments(@Query() query: QueryLoanPaymentsDto) {
     return this.service.listPayments(query, query);
   }
 
   @Get(':id')
+  @AnyAuthenticated()
   @ApiOperation({ summary: 'Détail prêt + échéancier complet + paiements' })
   findOne(@Param('id') id: string) {
     return this.service.findOne(id);

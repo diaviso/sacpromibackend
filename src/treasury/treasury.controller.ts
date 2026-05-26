@@ -27,6 +27,7 @@ import {
 import { TreasuryService } from './treasury.service';
 import { PaginationDto } from '../common/dto/pagination.dto';
 import { Roles } from '../common/decorators/roles.decorator';
+import { AnyAuthenticated } from '../common/decorators/any-authenticated.decorator';
 import {
   AuthenticatedUser,
   CurrentUser,
@@ -123,12 +124,14 @@ export class TreasuryController {
   constructor(private readonly service: TreasuryService) {}
 
   @Get('dashboard')
+  @AnyAuthenticated()
   @ApiOperation({ summary: 'Tableau de bord financier consolidé' })
   dashboard(@Query() query: QueryDashboardDto) {
     return this.service.getDashboard(query);
   }
 
   @Get('entries')
+  @AnyAuthenticated()
   @ApiOperation({
     summary: 'Grand livre de trésorerie (toutes écritures, paginé)',
   })
@@ -137,6 +140,7 @@ export class TreasuryController {
   }
 
   @Get('transfers')
+  @AnyAuthenticated()
   @ApiOperation({ summary: 'Liste paginée des transferts inter-comptes' })
   listTransfers(@Query() query: QueryTransfersDto) {
     return this.service.listTransfers(query, query);

@@ -1,4 +1,4 @@
-import { Body, Controller, Get, HttpCode, HttpStatus, Patch, Post } from '@nestjs/common';
+import { Body, Controller, Get, Headers, HttpCode, HttpStatus, Patch, Post } from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { Throttle } from '@nestjs/throttler';
 import { AuthService } from './auth.service';
@@ -9,6 +9,7 @@ import { ChangePasswordDto } from './dto/change-password.dto';
 import { ForgotPasswordDto } from './dto/forgot-password.dto';
 import { ResetPasswordDto } from './dto/reset-password.dto';
 import { Public } from '../common/decorators/public.decorator';
+import { AnyAuthenticated } from '../common/decorators/any-authenticated.decorator';
 import { CurrentUser, AuthenticatedUser } from '../common/decorators/current-user.decorator';
 
 @ApiTags('Auth')
@@ -68,6 +69,7 @@ export class AuthController {
   }
 
   @ApiBearerAuth('JWT-auth')
+  @AnyAuthenticated()
   @Get('me')
   @ApiOperation({ summary: "Profil de l'utilisateur connecté" })
   me(@CurrentUser() user: AuthenticatedUser) {
@@ -75,6 +77,7 @@ export class AuthController {
   }
 
   @ApiBearerAuth('JWT-auth')
+  @AnyAuthenticated()
   @Patch('change-password')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Modifier son mot de passe' })
@@ -83,5 +86,23 @@ export class AuthController {
     @Body() dto: ChangePasswordDto,
   ) {
     return this.authService.changePassword(user.id, dto);
+  }
+
+  @ApiBearerAuth('JWT-auth')
+  @AnyAuthenticated()
+  @Post('logout')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({
+    summary: 'Déconnexion (révoque l\'access token et le refresh token)',
+    description:
+      'Le jti de l\'access token (extrait du Bearer) et le refresh token transmis dans le body sont mis en blacklist jusqu\'à leur date d\'expiration.',
+  })
+  logout(
+    @CurrentUser() user: AuthenticatedUser,
+    @Body() dto: RefreshTokenDto,
+    @Headers('authorization') authorization: string,
+  ) {
+    const accessToken = authorization?.replace(/^Bearer\s+/i, '');
+    return this.authService.logout(user.id, accessToken, dto.refreshToken);
   }
 }

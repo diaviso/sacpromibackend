@@ -80,7 +80,15 @@ export class CapitalMovementsService {
 
   async findAll(
     query: PaginationDto,
-    filters: { type?: CapitalMovementType; accountId?: string; from?: string; to?: string },
+    filters: {
+      type?: CapitalMovementType;
+      accountId?: string;
+      from?: string;
+      to?: string;
+      search?: string;
+      sortBy?: 'movementDate' | 'amount';
+      sortOrder?: 'asc' | 'desc';
+    },
   ) {
     const where: Prisma.CapitalMovementWhereInput = {};
     if (filters.type) where.type = filters.type;
@@ -91,12 +99,25 @@ export class CapitalMovementsService {
       if (filters.to) where.movementDate.lte = new Date(filters.to);
     }
 
+    if (filters.search && filters.search.trim()) {
+      const term = filters.search.trim();
+      where.OR = [
+        { reference: { contains: term, mode: 'insensitive' } },
+        { contributorName: { contains: term, mode: 'insensitive' } },
+        { description: { contains: term, mode: 'insensitive' } },
+      ];
+    }
+
+    const sortBy = filters.sortBy ?? 'movementDate';
+    const sortOrder = filters.sortOrder ?? 'desc';
+    const orderBy: Prisma.CapitalMovementOrderByWithRelationInput = { [sortBy]: sortOrder };
+
     const [items, total] = await this.prisma.$transaction([
       this.prisma.capitalMovement.findMany({
         where,
         skip: query.skip,
         take: query.take,
-        orderBy: { movementDate: 'desc' },
+        orderBy,
         include: {
           account: { select: { id: true, name: true, type: true } },
           createdBy: { select: { id: true, fullName: true } },

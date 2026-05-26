@@ -20,6 +20,7 @@ import { Type } from 'class-transformer';
 import {
   IsBoolean,
   IsEnum,
+  IsIn,
   IsInt,
   IsOptional,
   IsString,
@@ -30,6 +31,7 @@ import {
 import { AccountsService } from './accounts.service';
 import { PaginationDto } from '../common/dto/pagination.dto';
 import { Roles } from '../common/decorators/roles.decorator';
+import { AnyAuthenticated } from '../common/decorators/any-authenticated.decorator';
 import {
   AuthenticatedUser,
   CurrentUser,
@@ -108,6 +110,13 @@ class UpdateAccountDto {
   note?: string;
 }
 
+export const ACCOUNT_SORT_FIELDS = [
+  'name',
+  'createdAt',
+  'openingBalance',
+] as const;
+export type AccountSortField = (typeof ACCOUNT_SORT_FIELDS)[number];
+
 class QueryAccountsDto extends PaginationDto {
   @ApiPropertyOptional({ enum: AccountType })
   @IsOptional()
@@ -119,6 +128,24 @@ class QueryAccountsDto extends PaginationDto {
   @Type(() => Boolean)
   @IsBoolean()
   isActive?: boolean;
+
+  @ApiPropertyOptional({
+    description: 'Recherche : nom, banque, n° de compte ou note',
+  })
+  @IsOptional()
+  @IsString()
+  @MaxLength(120)
+  search?: string;
+
+  @ApiPropertyOptional({ enum: ACCOUNT_SORT_FIELDS, default: 'name' })
+  @IsOptional()
+  @IsIn(ACCOUNT_SORT_FIELDS as unknown as string[])
+  sortBy?: AccountSortField;
+
+  @ApiPropertyOptional({ enum: ['asc', 'desc'], default: 'asc' })
+  @IsOptional()
+  @IsIn(['asc', 'desc'])
+  sortOrder?: 'asc' | 'desc';
 }
 
 @ApiTags('Accounts')
@@ -135,6 +162,7 @@ export class AccountsController {
   }
 
   @Get()
+  @AnyAuthenticated()
   @ApiOperation({
     summary: 'Liste paginée des comptes (avec soldes courants)',
   })
@@ -143,6 +171,7 @@ export class AccountsController {
   }
 
   @Get(':id')
+  @AnyAuthenticated()
   @ApiOperation({ summary: 'Détail d\'un compte (+ 20 dernières entrées)' })
   findOne(@Param('id') id: string) {
     return this.service.findOne(id);

@@ -26,20 +26,38 @@ export class ConservationCostsService {
     });
   }
 
-  async findAll(pagination: PaginationDto, from?: string, to?: string) {
+  async findAll(
+    pagination: PaginationDto,
+    filters: {
+      from?: string;
+      to?: string;
+      search?: string;
+      sortBy?: 'periodStart' | 'totalAmount';
+      sortOrder?: 'asc' | 'desc';
+    } = {},
+  ) {
     const where: Prisma.ConservationCostWhereInput = {};
-    if (from || to) {
+    if (filters.from || filters.to) {
       where.periodStart = {};
-      if (from) where.periodStart.gte = new Date(from);
-      if (to) where.periodStart.lte = new Date(to);
+      if (filters.from) where.periodStart.gte = new Date(filters.from);
+      if (filters.to) where.periodStart.lte = new Date(filters.to);
     }
+
+    if (filters.search && filters.search.trim()) {
+      const term = filters.search.trim();
+      where.OR = [{ note: { contains: term, mode: 'insensitive' } }];
+    }
+
+    const sortBy = filters.sortBy ?? 'periodStart';
+    const sortOrder = filters.sortOrder ?? 'desc';
+    const orderBy: Prisma.ConservationCostOrderByWithRelationInput = { [sortBy]: sortOrder };
 
     const [items, total] = await this.prisma.$transaction([
       this.prisma.conservationCost.findMany({
         where,
         skip: pagination.skip,
         take: pagination.take,
-        orderBy: { periodStart: 'desc' },
+        orderBy,
         include: { createdBy: { select: { id: true, fullName: true } } },
       }),
       this.prisma.conservationCost.count({ where }),

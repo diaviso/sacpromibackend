@@ -10,12 +10,18 @@ import {
 } from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiPropertyOptional, ApiTags } from '@nestjs/swagger';
 import { UserRole } from '@prisma/client';
-import { IsDateString, IsOptional } from 'class-validator';
+import { IsDateString, IsIn, IsOptional, IsString, MaxLength } from 'class-validator';
 import { ConservationCostsService } from './conservation-costs.service';
 import { CreateConservationCostDto } from './dto/create-conservation-cost.dto';
 import { PaginationDto } from '../common/dto/pagination.dto';
 import { Roles } from '../common/decorators/roles.decorator';
 import { CurrentUser, AuthenticatedUser } from '../common/decorators/current-user.decorator';
+
+export const CONSERVATION_COST_SORT_FIELDS = [
+  'periodStart',
+  'totalAmount',
+] as const;
+export type ConservationCostSortField = (typeof CONSERVATION_COST_SORT_FIELDS)[number];
 
 class QueryConservationCostsDto extends PaginationDto {
   @ApiPropertyOptional()
@@ -27,6 +33,22 @@ class QueryConservationCostsDto extends PaginationDto {
   @IsOptional()
   @IsDateString()
   to?: string;
+
+  @ApiPropertyOptional({ description: 'Recherche dans la note' })
+  @IsOptional()
+  @IsString()
+  @MaxLength(120)
+  search?: string;
+
+  @ApiPropertyOptional({ enum: CONSERVATION_COST_SORT_FIELDS, default: 'periodStart' })
+  @IsOptional()
+  @IsIn(CONSERVATION_COST_SORT_FIELDS as unknown as string[])
+  sortBy?: ConservationCostSortField;
+
+  @ApiPropertyOptional({ enum: ['asc', 'desc'], default: 'desc' })
+  @IsOptional()
+  @IsIn(['asc', 'desc'])
+  sortOrder?: 'asc' | 'desc';
 }
 
 @ApiTags('Conservation Costs')
@@ -50,7 +72,7 @@ export class ConservationCostsController {
   @Get()
   @ApiOperation({ summary: 'Liste paginée des coûts de conservation' })
   findAll(@Query() query: QueryConservationCostsDto) {
-    return this.service.findAll(query, query.from, query.to);
+    return this.service.findAll(query, query);
   }
 
   @Get(':id')

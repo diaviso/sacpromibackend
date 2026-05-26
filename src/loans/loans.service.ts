@@ -120,16 +120,37 @@ export class LoansService {
     });
   }
 
-  async findAll(query: PaginationDto, filters: { status?: LoanStatus }) {
+  async findAll(
+    query: PaginationDto,
+    filters: {
+      status?: LoanStatus;
+      search?: string;
+      sortBy?: 'startDate' | 'principalAmount' | 'remainingPrincipal' | 'reference';
+      sortOrder?: 'asc' | 'desc';
+    },
+  ) {
     const where: Prisma.LoanWhereInput = {};
     if (filters.status) where.status = filters.status;
+
+    if (filters.search && filters.search.trim()) {
+      const term = filters.search.trim();
+      where.OR = [
+        { reference: { contains: term, mode: 'insensitive' } },
+        { lenderName: { contains: term, mode: 'insensitive' } },
+        { note: { contains: term, mode: 'insensitive' } },
+      ];
+    }
+
+    const sortBy = filters.sortBy ?? 'startDate';
+    const sortOrder = filters.sortOrder ?? 'desc';
+    const orderBy: Prisma.LoanOrderByWithRelationInput = { [sortBy]: sortOrder };
 
     const [items, total] = await this.prisma.$transaction([
       this.prisma.loan.findMany({
         where,
         skip: query.skip,
         take: query.take,
-        orderBy: { startDate: 'desc' },
+        orderBy,
         include: {
           disbursementAccount: { select: { id: true, name: true } },
           _count: { select: { payments: true, schedule: true } },

@@ -107,18 +107,39 @@ export class FixedAssetsService {
 
   async findAll(
     query: PaginationDto,
-    filters: { category?: FixedAssetCategory; status?: FixedAssetStatus },
+    filters: {
+      category?: FixedAssetCategory;
+      status?: FixedAssetStatus;
+      search?: string;
+      sortBy?: 'acquisitionDate' | 'acquisitionCost' | 'name' | 'reference';
+      sortOrder?: 'asc' | 'desc';
+    },
   ) {
     const where: Prisma.FixedAssetWhereInput = {};
     if (filters.category) where.category = filters.category;
     if (filters.status) where.status = filters.status;
+
+    if (filters.search && filters.search.trim()) {
+      const term = filters.search.trim();
+      where.OR = [
+        { reference: { contains: term, mode: 'insensitive' } },
+        { name: { contains: term, mode: 'insensitive' } },
+        { serialNumber: { contains: term, mode: 'insensitive' } },
+        { location: { contains: term, mode: 'insensitive' } },
+        { note: { contains: term, mode: 'insensitive' } },
+      ];
+    }
+
+    const sortBy = filters.sortBy ?? 'acquisitionDate';
+    const sortOrder = filters.sortOrder ?? 'desc';
+    const orderBy: Prisma.FixedAssetOrderByWithRelationInput = { [sortBy]: sortOrder };
 
     const [items, total] = await this.prisma.$transaction([
       this.prisma.fixedAsset.findMany({
         where,
         skip: query.skip,
         take: query.take,
-        orderBy: { acquisitionDate: 'desc' },
+        orderBy,
         include: {
           paymentAccount: { select: { id: true, name: true } },
           depreciations: {

@@ -146,12 +146,25 @@ export class PurchaseInvoicesService {
       if (query.to) where.invoiceDate.lte = new Date(query.to);
     }
 
+    if (query.search && query.search.trim()) {
+      const term = query.search.trim();
+      where.OR = [
+        { reference: { contains: term, mode: 'insensitive' } },
+        { supplierInvoiceNumber: { contains: term, mode: 'insensitive' } },
+        { supplier: { name: { contains: term, mode: 'insensitive' } } },
+      ];
+    }
+
+    const sortBy = query.sortBy ?? 'invoiceDate';
+    const sortOrder = query.sortOrder ?? 'desc';
+    const orderBy: Prisma.PurchaseInvoiceOrderByWithRelationInput = { [sortBy]: sortOrder };
+
     const [items, total] = await this.prisma.$transaction([
       this.prisma.purchaseInvoice.findMany({
         where,
         skip: query.skip,
         take: query.take,
-        orderBy: { invoiceDate: 'desc' },
+        orderBy,
         include: {
           supplier: { select: { id: true, name: true } },
           _count: { select: { items: true, payments: true } },

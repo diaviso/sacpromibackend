@@ -70,17 +70,45 @@ export class CustomerOrdersService {
     });
   }
 
-  async findAll(query: PaginationDto, status?: CustomerOrderStatus, customerId?: string) {
+  async findAll(
+    query: PaginationDto,
+    filters: {
+      status?: CustomerOrderStatus;
+      customerId?: string;
+      search?: string;
+      from?: string;
+      to?: string;
+      sortBy?: 'orderDate' | 'reference' | 'totalAmount' | 'status';
+      sortOrder?: 'asc' | 'desc';
+    },
+  ) {
     const where: Prisma.CustomerOrderWhereInput = {};
-    if (status) where.status = status;
-    if (customerId) where.customerId = customerId;
+    if (filters.status) where.status = filters.status;
+    if (filters.customerId) where.customerId = filters.customerId;
+    if (filters.from || filters.to) {
+      where.orderDate = {};
+      if (filters.from) where.orderDate.gte = new Date(filters.from);
+      if (filters.to) where.orderDate.lte = new Date(filters.to);
+    }
+    if (filters.search && filters.search.trim()) {
+      const term = filters.search.trim();
+      where.OR = [
+        { reference: { contains: term, mode: 'insensitive' } },
+        { note: { contains: term, mode: 'insensitive' } },
+        { customer: { name: { contains: term, mode: 'insensitive' } } },
+      ];
+    }
+
+    const sortBy = filters.sortBy ?? 'orderDate';
+    const sortOrder = filters.sortOrder ?? 'desc';
+    const orderBy: Prisma.CustomerOrderOrderByWithRelationInput = { [sortBy]: sortOrder };
 
     const [items, total] = await this.prisma.$transaction([
       this.prisma.customerOrder.findMany({
         where,
         skip: query.skip,
         take: query.take,
-        orderBy: { orderDate: 'desc' },
+        orderBy,
         include: {
           customer: { select: { id: true, name: true } },
           _count: { select: { items: true } },

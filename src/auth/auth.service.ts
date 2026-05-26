@@ -20,6 +20,10 @@ import { ForgotPasswordDto } from './dto/forgot-password.dto';
 import { ResetPasswordDto } from './dto/reset-password.dto';
 import { JwtPayload } from './strategies/jwt.strategy';
 
+function computeJti(token: string): string {
+  return crypto.createHash('sha256').update(token).digest('hex');
+}
+
 const RESET_TOKEN_TTL_MINUTES = 30;
 
 export type SafeUser = Omit<User, 'password'>;
@@ -54,7 +58,8 @@ export class AuthService {
   }
 
   private async generateTokens(user: Pick<User, 'id' | 'email' | 'role'>): Promise<AuthTokens> {
-    const payload: JwtPayload = { sub: user.id, email: user.email, role: user.role };
+    // iat + exp sont injectés par jsonwebtoken — ici on ne fournit que le payload "métier".
+    const payload = { sub: user.id, email: user.email, role: user.role };
 
     const accessOptions = {
       secret: this.config.get<string>('JWT_ACCESS_SECRET'),
@@ -153,12 +158,87 @@ export class AuthService {
       throw new UnauthorizedException('Refresh token invalide ou expiré');
     }
 
+    // Refuser si le refresh token a été révoqué (logout préalable)
+    const jti = computeJti(dto.refreshToken);
+    const revoked = await this.prisma.revokedToken.findUnique({ where: { jti } });
+    if (revoked) {
+      throw new UnauthorizedException('Refresh token révoqué');
+    }
+
     const user = await this.prisma.user.findUnique({ where: { id: payload.sub } });
     if (!user || !user.isActive) {
       throw new UnauthorizedException('Compte inactif ou inexistant');
     }
 
     return this.generateTokens(user);
+  }
+
+  /**
+   * Révoque l'access token et le refresh token en cours. Ils ne pourront plus
+   * être utilisés (la JwtStrategy + l'endpoint refresh vérifient la blacklist).
+   * Idempotent : si un token a déjà été blacklisté on continue silencieusement.
+   */
+  async logout(
+    userId: string,
+    accessToken: string | undefined,
+    refreshToken: string,
+  ): Promise<{ message: string }> {
+    const operations: Promise<unknown>[] = [];
+
+    if (accessToken) {
+      try {
+        const payload = await this.jwt.verifyAsync<JwtPayload>(accessToken, {
+          secret: this.config.get<string>('JWT_ACCESS_SECRET'),
+        });
+        operations.push(
+          this.prisma.revokedToken.upsert({
+            where: { jti: computeJti(accessToken) },
+            create: {
+              jti: computeJti(accessToken),
+              userId,
+              type: 'access',
+              expiresAt: new Date(payload.exp * 1000),
+              reason: 'logout',
+            },
+            update: {},
+          }),
+        );
+      } catch (err) {
+        this.logger.warn(`Access token invalide à la déconnexion : ${(err as Error).message}`);
+      }
+    }
+
+    try {
+      const payload = await this.jwt.verifyAsync<JwtPayload>(refreshToken, {
+        secret: this.config.get<string>('JWT_REFRESH_SECRET'),
+      });
+      operations.push(
+        this.prisma.revokedToken.upsert({
+          where: { jti: computeJti(refreshToken) },
+          create: {
+            jti: computeJti(refreshToken),
+            userId,
+            type: 'refresh',
+            expiresAt: new Date(payload.exp * 1000),
+            reason: 'logout',
+          },
+          update: {},
+        }),
+      );
+    } catch (err) {
+      this.logger.warn(`Refresh token invalide à la déconnexion : ${(err as Error).message}`);
+    }
+
+    await Promise.all(operations);
+    return { message: 'Déconnexion réussie' };
+  }
+
+  /** Vérifie si un access token donné est révoqué (utilisé par la JwtStrategy). */
+  async isAccessTokenRevoked(token: string): Promise<boolean> {
+    const revoked = await this.prisma.revokedToken.findUnique({
+      where: { jti: computeJti(token) },
+    });
+    return !!revoked;
   }
 
   async getProfile(userId: string): Promise<SafeUser> {

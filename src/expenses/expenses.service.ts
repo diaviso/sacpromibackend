@@ -79,6 +79,9 @@ export class ExpensesService {
     status?: ExpenseStatus;
     from?: string;
     to?: string;
+    search?: string;
+    sortBy?: 'expenseDate' | 'amount' | 'createdAt';
+    sortOrder?: 'asc' | 'desc';
   }) {
     const where: Prisma.ExpenseWhereInput = {};
     if (filters.categoryId) where.categoryId = filters.categoryId;
@@ -89,13 +92,25 @@ export class ExpensesService {
       if (filters.from) where.expenseDate.gte = new Date(filters.from);
       if (filters.to) where.expenseDate.lte = new Date(filters.to);
     }
+    if (filters.search && filters.search.trim()) {
+      const term = filters.search.trim();
+      where.OR = [
+        { description: { contains: term, mode: 'insensitive' } },
+        { beneficiary: { contains: term, mode: 'insensitive' } },
+        { category: { name: { contains: term, mode: 'insensitive' } } },
+      ];
+    }
+
+    const sortBy = filters.sortBy ?? 'expenseDate';
+    const sortOrder = filters.sortOrder ?? 'desc';
+    const orderBy: Prisma.ExpenseOrderByWithRelationInput = { [sortBy]: sortOrder };
 
     const [items, total] = await this.prisma.$transaction([
       this.prisma.expense.findMany({
         where,
         skip: query.skip,
         take: query.take,
-        orderBy: { expenseDate: 'desc' },
+        orderBy,
         include: {
           category: true,
           createdBy: { select: { id: true, fullName: true } },

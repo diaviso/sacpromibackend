@@ -73,12 +73,26 @@ export class PurchaseOrdersService {
       if (query.to) where.orderDate.lte = new Date(query.to);
     }
 
+    // Recherche : sur la référence du BC, le nom du fournisseur et la note
+    if (query.search && query.search.trim()) {
+      const term = query.search.trim();
+      where.OR = [
+        { reference: { contains: term, mode: 'insensitive' } },
+        { note: { contains: term, mode: 'insensitive' } },
+        { supplier: { name: { contains: term, mode: 'insensitive' } } },
+      ];
+    }
+
+    const sortBy = query.sortBy ?? 'orderDate';
+    const sortOrder = query.sortOrder ?? 'desc';
+    const orderBy: Prisma.PurchaseOrderOrderByWithRelationInput = { [sortBy]: sortOrder };
+
     const [items, total] = await this.prisma.$transaction([
       this.prisma.purchaseOrder.findMany({
         where,
         skip: query.skip,
         take: query.take,
-        orderBy: { orderDate: 'desc' },
+        orderBy,
         include: {
           supplier: { select: { id: true, name: true } },
           _count: { select: { items: true } },

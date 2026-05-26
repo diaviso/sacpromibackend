@@ -11,12 +11,15 @@ import {
 } from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiPropertyOptional, ApiTags } from '@nestjs/swagger';
 import { ExpenseActivity, ExpenseStatus, UserRole } from '@prisma/client';
-import { IsDateString, IsEnum, IsInt, IsOptional, IsUUID, Min } from 'class-validator';
+import { IsDateString, IsEnum, IsIn, IsInt, IsOptional, IsString, IsUUID, MaxLength, Min } from 'class-validator';
 import { ExpensesService } from './expenses.service';
 import { CreateCategoryDto, CreateExpenseDto } from './dto/create-expense.dto';
 import { PaginationDto } from '../common/dto/pagination.dto';
 import { Roles } from '../common/decorators/roles.decorator';
 import { CurrentUser, AuthenticatedUser } from '../common/decorators/current-user.decorator';
+
+const EXPENSE_SORT_FIELDS = ['expenseDate', 'amount', 'createdAt'] as const;
+type ExpenseSortField = (typeof EXPENSE_SORT_FIELDS)[number];
 
 class QueryExpensesDto extends PaginationDto {
   @ApiPropertyOptional()
@@ -43,6 +46,22 @@ class QueryExpensesDto extends PaginationDto {
   @IsOptional()
   @IsDateString()
   to?: string;
+
+  @ApiPropertyOptional({ description: 'Recherche : description, bénéficiaire' })
+  @IsOptional()
+  @IsString()
+  @MaxLength(120)
+  search?: string;
+
+  @ApiPropertyOptional({ enum: EXPENSE_SORT_FIELDS, default: 'expenseDate' })
+  @IsOptional()
+  @IsIn(EXPENSE_SORT_FIELDS as unknown as string[])
+  sortBy?: ExpenseSortField;
+
+  @ApiPropertyOptional({ enum: ['asc', 'desc'], default: 'desc' })
+  @IsOptional()
+  @IsIn(['asc', 'desc'])
+  sortOrder?: 'asc' | 'desc';
 }
 
 class ConfirmExpenseDto {

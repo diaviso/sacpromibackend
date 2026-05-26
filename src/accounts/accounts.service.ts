@@ -78,17 +78,43 @@ export class AccountsService {
     return this.prisma.account.update({ where: { id }, data: dto });
   }
 
-  async findAll(query: PaginationDto, filters: { type?: AccountType; isActive?: boolean }) {
+  async findAll(
+    query: PaginationDto,
+    filters: {
+      type?: AccountType;
+      isActive?: boolean;
+      search?: string;
+      sortBy?: 'name' | 'createdAt' | 'openingBalance';
+      sortOrder?: 'asc' | 'desc';
+    },
+  ) {
     const where: Prisma.AccountWhereInput = {};
     if (filters.type) where.type = filters.type;
     if (filters.isActive !== undefined) where.isActive = filters.isActive;
+
+    if (filters.search && filters.search.trim()) {
+      const term = filters.search.trim();
+      where.OR = [
+        { name: { contains: term, mode: 'insensitive' } },
+        { bankName: { contains: term, mode: 'insensitive' } },
+        { accountNumber: { contains: term, mode: 'insensitive' } },
+        { note: { contains: term, mode: 'insensitive' } },
+      ];
+    }
+
+    const sortBy = filters.sortBy ?? 'name';
+    const sortOrder = filters.sortOrder ?? (sortBy === 'name' ? 'asc' : 'desc');
+    const orderBy: Prisma.AccountOrderByWithRelationInput[] =
+      sortBy === 'name'
+        ? [{ isActive: 'desc' }, { name: sortOrder }]
+        : [{ isActive: 'desc' }, { [sortBy]: sortOrder } as Prisma.AccountOrderByWithRelationInput];
 
     const [accounts, total] = await this.prisma.$transaction([
       this.prisma.account.findMany({
         where,
         skip: query.skip,
         take: query.take,
-        orderBy: [{ isActive: 'desc' }, { name: 'asc' }],
+        orderBy,
       }),
       this.prisma.account.count({ where }),
     ]);

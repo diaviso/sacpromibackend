@@ -10,12 +10,15 @@ import {
 } from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiPropertyOptional, ApiTags } from '@nestjs/swagger';
 import { CustomerOrderStatus, UserRole } from '@prisma/client';
-import { IsEnum, IsOptional, IsString, IsUUID, MaxLength, MinLength } from 'class-validator';
+import { IsDateString, IsEnum, IsIn, IsOptional, IsString, IsUUID, MaxLength, MinLength } from 'class-validator';
 import { CustomerOrdersService } from './customer-orders.service';
 import { CreateCustomerOrderDto } from './dto/create-customer-order.dto';
 import { PaginationDto } from '../common/dto/pagination.dto';
 import { Roles } from '../common/decorators/roles.decorator';
 import { CurrentUser, AuthenticatedUser } from '../common/decorators/current-user.decorator';
+
+const CUSTOMER_ORDER_SORT_FIELDS = ['orderDate', 'reference', 'totalAmount', 'status'] as const;
+type CustomerOrderSortField = (typeof CUSTOMER_ORDER_SORT_FIELDS)[number];
 
 class QueryCustomerOrdersDto extends PaginationDto {
   @ApiPropertyOptional({ enum: CustomerOrderStatus })
@@ -27,6 +30,32 @@ class QueryCustomerOrdersDto extends PaginationDto {
   @IsOptional()
   @IsUUID()
   customerId?: string;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  @MaxLength(120)
+  search?: string;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsDateString()
+  from?: string;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsDateString()
+  to?: string;
+
+  @ApiPropertyOptional({ enum: CUSTOMER_ORDER_SORT_FIELDS, default: 'orderDate' })
+  @IsOptional()
+  @IsIn(CUSTOMER_ORDER_SORT_FIELDS as unknown as string[])
+  sortBy?: CustomerOrderSortField;
+
+  @ApiPropertyOptional({ enum: ['asc', 'desc'], default: 'desc' })
+  @IsOptional()
+  @IsIn(['asc', 'desc'])
+  sortOrder?: 'asc' | 'desc';
 }
 
 class CancelOrderDto {
@@ -52,7 +81,7 @@ export class CustomerOrdersController {
   @Get()
   @ApiOperation({ summary: 'Liste paginée des commandes' })
   findAll(@Query() query: QueryCustomerOrdersDto) {
-    return this.service.findAll(query, query.status, query.customerId);
+    return this.service.findAll(query, query);
   }
 
   @Get(':id')

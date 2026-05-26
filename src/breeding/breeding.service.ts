@@ -84,16 +84,44 @@ export class BreedingService {
     });
   }
 
-  async findAll(query: PaginationDto, status?: BreedingBatchStatus) {
+  async findAll(
+    query: PaginationDto,
+    filters: {
+      status?: BreedingBatchStatus;
+      search?: string;
+      from?: string;
+      to?: string;
+      sortBy?: 'startDate' | 'reference' | 'currentCount' | 'totalCost' | 'costPerHead';
+      sortOrder?: 'asc' | 'desc';
+    },
+  ) {
     const where: Prisma.BreedingBatchWhereInput = {};
-    if (status) where.status = status;
+    if (filters.status) where.status = filters.status;
+    if (filters.from || filters.to) {
+      where.startDate = {};
+      if (filters.from) where.startDate.gte = new Date(filters.from);
+      if (filters.to) where.startDate.lte = new Date(filters.to);
+    }
+    if (filters.search && filters.search.trim()) {
+      const term = filters.search.trim();
+      where.OR = [
+        { reference: { contains: term, mode: 'insensitive' } },
+        { strain: { contains: term, mode: 'insensitive' } },
+        { chickSupplier: { contains: term, mode: 'insensitive' } },
+        { note: { contains: term, mode: 'insensitive' } },
+      ];
+    }
+
+    const sortBy = filters.sortBy ?? 'startDate';
+    const sortOrder = filters.sortOrder ?? 'desc';
+    const orderBy: Prisma.BreedingBatchOrderByWithRelationInput = { [sortBy]: sortOrder };
 
     const [items, total] = await this.prisma.$transaction([
       this.prisma.breedingBatch.findMany({
         where,
         skip: query.skip,
         take: query.take,
-        orderBy: { startDate: 'desc' },
+        orderBy,
         include: { _count: { select: { records: true } } },
       }),
       this.prisma.breedingBatch.count({ where }),
@@ -143,6 +171,29 @@ export class BreedingService {
       orderBy: { recordDate: 'desc' },
       include: {
         createdBy: { select: { id: true, fullName: true } },
+      },
+    });
+  }
+
+  async updateSettings(
+    id: string,
+    dto: {
+      targetWeightGrams?: number;
+      targetCycleDays?: number;
+      mortalityAlertPercent?: number;
+      expectedSalePricePerKg?: number;
+    },
+  ) {
+    const batch = await this.prisma.breedingBatch.findUnique({ where: { id } });
+    if (!batch) throw new NotFoundException(`Bande ${id} introuvable`);
+
+    return this.prisma.breedingBatch.update({
+      where: { id },
+      data: {
+        targetWeightGrams: dto.targetWeightGrams,
+        targetCycleDays: dto.targetCycleDays,
+        mortalityAlertPercent: dto.mortalityAlertPercent,
+        expectedSalePricePerKg: dto.expectedSalePricePerKg,
       },
     });
   }

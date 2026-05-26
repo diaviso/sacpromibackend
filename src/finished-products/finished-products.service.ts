@@ -29,12 +29,16 @@ export class FinishedProductsService {
     if (query.category) where.category = query.category;
     if (typeof query.isActive === 'boolean') where.isActive = query.isActive;
 
+    const sortBy = query.sortBy ?? 'name';
+    const sortOrder = query.sortOrder ?? 'asc';
+    const orderBy: Prisma.FinishedProductOrderByWithRelationInput = { [sortBy]: sortOrder };
+
     const [items, total] = await this.prisma.$transaction([
       this.prisma.finishedProduct.findMany({
         where,
         skip: query.skip,
         take: query.take,
-        orderBy: { name: 'asc' },
+        orderBy,
       }),
       this.prisma.finishedProduct.count({ where }),
     ]);
