@@ -68,10 +68,14 @@ export class SalesController {
   @ApiOperation({
     summary: 'Créer une facture de vente / reçu',
     description:
-      'Vérifie le stock, ponctionne en FIFO, vérifie le plafond crédit (warning), met à jour la commande liée — tout en transaction.',
+      "Vérifie le stock (FIFO atomique), refuse si produit désactivé, bloque si plafond crédit dépassé " +
+      "(sauf overrideCreditLimit=true par un DIRECTOR), met à jour la commande liée — tout en transaction.",
   })
   create(@Body() dto: CreateSaleDto, @CurrentUser() user: AuthenticatedUser) {
-    return this.service.create(dto, user.id);
+    // Seul un DIRECTOR peut forcer un dépassement de plafond crédit
+    const overrideCreditLimit =
+      dto.overrideCreditLimit === true && user.role === UserRole.DIRECTOR;
+    return this.service.create(dto, user.id, { overrideCreditLimit });
   }
 
   @Get()

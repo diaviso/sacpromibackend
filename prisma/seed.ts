@@ -40,6 +40,20 @@ async function nextRef(prefix: string, year: number): Promise<string> {
 }
 
 async function main() {
+  // 🛡️ Garde-fou : le seed efface TOUTES les données avec deleteMany() global.
+  // Bloquer en production sauf si l'utilisateur a explicitement défini
+  // ALLOW_SEED_IN_PROD=true (cas de bootstrap initial documenté).
+  if (process.env.NODE_ENV === 'production' && process.env.ALLOW_SEED_IN_PROD !== 'true') {
+    console.error('');
+    console.error('❌ REFUS D\'EXÉCUTION : le seed est bloqué en production.');
+    console.error('');
+    console.error('   Le seed efface TOUTES les données via deleteMany() global.');
+    console.error('   Pour bootstrap une nouvelle BDD de prod, lancez avec :');
+    console.error('     ALLOW_SEED_IN_PROD=true npm run seed');
+    console.error('');
+    process.exit(1);
+  }
+
   console.log('🌱 Démarrage du seed (Phases 1 + 2)...');
 
   // === Cleanup (ordre inverse des dépendances) ===
@@ -90,6 +104,7 @@ async function main() {
   await prisma.passwordResetToken.deleteMany();
   await prisma.user.deleteMany();
   await prisma.sequenceCounter.deleteMany();
+  await prisma.jobLock.deleteMany();
 
   console.log('🧹 Tables nettoyées');
 

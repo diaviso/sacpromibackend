@@ -147,6 +147,17 @@ CREATE TABLE "revoked_tokens" (
 );
 
 -- CreateTable
+CREATE TABLE "job_locks" (
+    "id" TEXT NOT NULL,
+    "key" TEXT NOT NULL,
+    "executedAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "executedBy" TEXT,
+    "note" TEXT,
+
+    CONSTRAINT "job_locks_pkey" PRIMARY KEY ("id")
+);
+
+-- CreateTable
 CREATE TABLE "suppliers" (
     "id" TEXT NOT NULL,
     "name" TEXT NOT NULL,
@@ -928,6 +939,12 @@ CREATE INDEX "revoked_tokens_userId_idx" ON "revoked_tokens"("userId");
 
 -- CreateIndex
 CREATE INDEX "revoked_tokens_expiresAt_idx" ON "revoked_tokens"("expiresAt");
+
+-- CreateIndex
+CREATE UNIQUE INDEX "job_locks_key_key" ON "job_locks"("key");
+
+-- CreateIndex
+CREATE INDEX "job_locks_key_idx" ON "job_locks"("key");
 
 -- CreateIndex
 CREATE INDEX "suppliers_name_idx" ON "suppliers"("name");

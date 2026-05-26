@@ -4,6 +4,7 @@ import { Type } from 'class-transformer';
 import {
   ArrayMinSize,
   IsArray,
+  IsBoolean,
   IsDateString,
   IsEnum,
   IsInt,
@@ -67,4 +68,13 @@ export class CreateSaleDto {
   @ValidateNested({ each: true })
   @Type(() => CreateSaleItemDto)
   items!: CreateSaleItemDto[];
+
+  @ApiPropertyOptional({
+    default: false,
+    description:
+      "Bypass du plafond crédit (réservé au directeur — la vente est créée même si le plafond du client est dépassé, avec un warning en réponse).",
+  })
+  @IsOptional()
+  @IsBoolean()
+  overrideCreditLimit?: boolean;
 }

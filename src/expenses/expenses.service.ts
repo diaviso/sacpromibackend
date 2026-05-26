@@ -219,53 +219,100 @@ export class ExpensesService {
   }
 
   // ========================================
-  // CRON RÉCURRENTES — 1er du mois à 02:00
+  // CRON RÉCURRENTES — 1er du mois à 02:00 (timezone Africa/Dakar)
   // ========================================
-  @Cron('0 2 1 * *')
+  @Cron('0 2 1 * *', { timeZone: 'Africa/Dakar' })
   async generateRecurringExpenses() {
-    this.logger.log('🔄 Génération des dépenses récurrentes (cron mensuel)');
+    const now = new Date();
+    return this.runRecurringExpensesGeneration(now);
+  }
 
+  /**
+   * Génère les dépenses récurrentes pour le mois de `targetDate` de façon idempotente.
+   *
+   * Mécanisme de protection contre les doublons :
+   * 1. Une ligne `JobLock` avec clé unique `recurring-expenses-YYYY-MM` est créée
+   *    en début d'exécution dans une transaction. La contrainte unique sur `key`
+   *    fait échouer toute exécution concurrente avec une P2002 → on sort proprement.
+   * 2. À l'intérieur, on relit les templates et on vérifie qu'aucune instance
+   *    n'a déjà été générée pour le mois (double sécurité).
+   *
+   * Cette approche résiste aux scénarios :
+   * - Redémarrage du conteneur Railway pendant le cron → 2e démarrage = no-op
+   * - Scaling horizontal (2 pods qui démarrent en même temps) → un seul gagne le lock
+   * - Déclenchement manuel par le directeur (endpoint API ou rejouage)
+   */
+  async runRecurringExpensesGeneration(targetDate: Date) {
+    const year = targetDate.getFullYear();
+    const month = targetDate.getMonth() + 1; // 1-12
+    const lockKey = `recurring-expenses-${year}-${String(month).padStart(2, '0')}`;
+
+    this.logger.log(`🔄 Génération des dépenses récurrentes ${lockKey}`);
+
+    // Étape 1 : tenter d'acquérir le verrou. Si la contrainte unique échoue,
+    // c'est qu'un autre process a déjà tourné — on sort sans erreur.
+    try {
+      await this.prisma.jobLock.create({
+        data: { key: lockKey, note: 'Génération automatique mensuelle' },
+      });
+    } catch (err) {
+      if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2002') {
+        this.logger.warn(`⏭️  Lock déjà acquis pour ${lockKey} — exécution ignorée (idempotence)`);
+        return { skipped: true, reason: 'already-executed', generated: 0 };
+      }
+      throw err;
+    }
+
+    // Étape 2 : générer les instances pour chaque template. Le tout dans une
+    // transaction pour garantir l'atomicité (si une création échoue, rien
+    // n'est créé). Si une instance existe déjà, on l'ignore (sécurité 2).
     const recurringTemplates = await this.prisma.expense.findMany({
       where: { isRecurring: true, parentRecurringId: null },
     });
 
-    const today = new Date();
+    const monthStart = new Date(year, month - 1, 1);
+    const nextMonthStart = new Date(year, month, 1);
+
     let generated = 0;
+    await this.prisma.$transaction(async (tx) => {
+      for (const template of recurringTemplates) {
+        const dayOfMonth = template.recurrenceDayOfMonth ?? 1;
+        // Jour valide pour le mois (ex: 31 février → ramené à fin de mois)
+        const lastDayOfMonth = new Date(year, month, 0).getDate();
+        const safeDay = Math.min(dayOfMonth, lastDayOfMonth);
+        const expenseDate = new Date(year, month - 1, safeDay);
 
-    for (const template of recurringTemplates) {
-      const dayOfMonth = template.recurrenceDayOfMonth ?? 1;
-      const targetDate = new Date(today.getFullYear(), today.getMonth(), dayOfMonth);
-
-      // Vérifier qu'on n'a pas déjà généré ce mois
-      const existing = await this.prisma.expense.findFirst({
-        where: {
-          parentRecurringId: template.id,
-          expenseDate: {
-            gte: new Date(today.getFullYear(), today.getMonth(), 1),
-            lt: new Date(today.getFullYear(), today.getMonth() + 1, 1),
+        // Sécurité 2 : vérifier qu'aucune instance n'existe déjà pour ce template ce mois-ci
+        const existing = await tx.expense.findFirst({
+          where: {
+            parentRecurringId: template.id,
+            expenseDate: { gte: monthStart, lt: nextMonthStart },
           },
-        },
-      });
+        });
+        if (existing) continue;
 
-      if (existing) continue;
+        await tx.expense.create({
+          data: {
+            amount: template.amount,
+            categoryId: template.categoryId,
+            activity: template.activity,
+            expenseDate,
+            description: template.description,
+            beneficiary: template.beneficiary,
+            accountId: template.accountId,
+            isRecurring: false,
+            parentRecurringId: template.id,
+            status: ExpenseStatus.PENDING_CONFIRMATION,
+            createdById: template.createdById,
+          },
+        });
+        generated++;
+      }
+    });
 
-      await this.prisma.expense.create({
-        data: {
-          amount: template.amount,
-          categoryId: template.categoryId,
-          activity: template.activity,
-          expenseDate: targetDate,
-          description: template.description,
-          beneficiary: template.beneficiary,
-          isRecurring: false,
-          parentRecurringId: template.id,
-          status: ExpenseStatus.PENDING_CONFIRMATION,
-          createdById: template.createdById,
-        },
-      });
-      generated++;
-    }
-
-    this.logger.log(`✅ ${generated} dépense(s) récurrente(s) générée(s) en attente de confirmation`);
+    this.logger.log(
+      `✅ ${generated} dépense(s) récurrente(s) générée(s) pour ${lockKey} (en attente de confirmation)`,
+    );
+    return { skipped: false, generated, month: lockKey };
   }
 }

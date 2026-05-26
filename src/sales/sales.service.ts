@@ -34,7 +34,7 @@ export class SalesService {
     private readonly customerOrdersService: CustomerOrdersService,
   ) {}
 
-  async create(dto: CreateSaleDto, userId: string) {
+  async create(dto: CreateSaleDto, userId: string, options?: { overrideCreditLimit?: boolean }) {
     const customer = await this.prisma.customer.findUnique({ where: { id: dto.customerId } });
     if (!customer || !customer.isActive) {
       throw new BadRequestException('Client introuvable ou inactif');
@@ -48,7 +48,20 @@ export class SalesService {
       throw new BadRequestException('Une ou plusieurs produits finis introuvables');
     }
 
-    // Calcul des montants + vérif plafond crédit
+    // VALIDATION : refuser les produits désactivés ou en quantité <= 0
+    const inactiveProducts = products.filter((p) => !p.isActive);
+    if (inactiveProducts.length > 0) {
+      throw new BadRequestException(
+        `Vente impossible : produit(s) désactivé(s) — ${inactiveProducts.map((p) => p.name).join(', ')}`,
+      );
+    }
+    for (const item of dto.items) {
+      if (item.quantity <= 0) {
+        throw new BadRequestException('Toutes les quantités doivent être strictement positives');
+      }
+    }
+
+    // Calcul des montants
     const itemsResolved = dto.items.map((it) => {
       const product = products.find((p) => p.id === it.finishedProductId)!;
       const defaultPrice =
@@ -66,18 +79,29 @@ export class SalesService {
     });
     const totalAmount = itemsResolved.reduce((s, it) => s + it.lineAmount, 0);
 
-    // Vérif plafond crédit (warning, pas blocage)
+    // VALIDATION : plafond crédit — blocage strict, sauf override explicite par directeur
     const warnings: string[] = [];
     if (dto.paymentMethod === SalePaymentMethod.CREDIT && customer.creditLimit > 0) {
       const currentDebt = await this.prisma.saleInvoice.aggregate({
-        where: { customerId: dto.customerId, paymentStatus: { in: ['UNPAID', 'PARTIALLY_PAID'] } },
+        where: {
+          customerId: dto.customerId,
+          paymentStatus: { in: [PaymentStatus.UNPAID, PaymentStatus.PARTIALLY_PAID] },
+        },
         _sum: { amountRemaining: true },
       });
       const currentBalance = currentDebt._sum.amountRemaining ?? 0;
       if (currentBalance + totalAmount > customer.creditLimit) {
-        warnings.push(
-          `Plafond crédit dépassé : créances actuelles ${currentBalance} + cette vente ${totalAmount} > plafond ${customer.creditLimit} FCFA`,
-        );
+        const msg =
+          `Plafond crédit dépassé : créances actuelles ${currentBalance.toLocaleString('fr-FR')} ` +
+          `+ cette vente ${totalAmount.toLocaleString('fr-FR')} > plafond ` +
+          `${customer.creditLimit.toLocaleString('fr-FR')} FCFA`;
+        if (options?.overrideCreditLimit) {
+          // Bypass autorisé (directeur) : on log et on continue avec warning
+          this.logger.warn(`Vente avec dépassement de crédit (override) — client ${customer.name} : ${msg}`);
+          warnings.push(msg);
+        } else {
+          throw new BadRequestException(msg);
+        }
       }
     }
 
@@ -85,6 +109,36 @@ export class SalesService {
       const invoiceDate = new Date(dto.invoiceDate);
       const prefix = dto.type === SaleInvoiceType.INVOICE ? 'FAC' : 'REC';
       const reference = await this.sequence.nextReference(prefix, invoiceDate.getFullYear(), tx);
+
+      // VALIDATION ATOMIQUE : pré-check du stock DANS la transaction pour éviter
+      // les race conditions entre 2 ventes concurrentes du même produit.
+      // On agrège la quantité demandée par produit (au cas où plusieurs lignes
+      // du même produit dans la même facture).
+      const demandByProduct = new Map<string, number>();
+      for (const item of itemsResolved) {
+        demandByProduct.set(
+          item.finishedProductId,
+          (demandByProduct.get(item.finishedProductId) ?? 0) + item.quantity,
+        );
+      }
+      for (const [productId, requestedQty] of demandByProduct.entries()) {
+        const liveProduct = await tx.finishedProduct.findUnique({
+          where: { id: productId },
+          select: { name: true, currentStock: true, isActive: true, unit: true },
+        });
+        if (!liveProduct) {
+          throw new BadRequestException(`Produit ${productId} introuvable`);
+        }
+        if (!liveProduct.isActive) {
+          throw new BadRequestException(`Produit "${liveProduct.name}" désactivé`);
+        }
+        const available = Number(liveProduct.currentStock);
+        if (available < requestedQty) {
+          throw new BadRequestException(
+            `Stock insuffisant pour "${liveProduct.name}" : ${available} ${liveProduct.unit.toLowerCase()} disponible(s), ${requestedQty} demandé(s)`,
+          );
+        }
+      }
 
       // Statut paiement initial
       const isCredit = dto.paymentMethod === SalePaymentMethod.CREDIT;

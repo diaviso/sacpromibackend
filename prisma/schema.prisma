@@ -333,6 +333,23 @@ model RevokedToken {
 }
 
 // =====================================================
+// JOB LOCK — sérialise l'exécution des crons pour éviter
+// les doublons en cas de redémarrage ou de scaling horizontal.
+// La contrainte unique sur `key` agit comme un verrou idempotent.
+// =====================================================
+
+model JobLock {
+  id         String   @id @default(uuid())
+  key        String   @unique // ex: "recurring-expenses-2026-05", "depreciation-2026-04"
+  executedAt DateTime @default(now())
+  executedBy String? // id de l'utilisateur "system" qui a exécuté
+  note       String?
+
+  @@index([key])
+  @@map("job_locks")
+}
+
+// =====================================================
 // SUPPLIER
 // =====================================================
 
