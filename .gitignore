@@ -53,7 +53,8 @@ backups/
 *.bak
 
 # Justificatifs uploadés (en prod : Railway Volume monté sur UPLOAD_DIR)
-uploads/
+# Ancré à la racine pour ne PAS matcher src/uploads/ (code source du module)
+/uploads/
 
 # Misc
 *.tsbuildinfo
