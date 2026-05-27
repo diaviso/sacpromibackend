@@ -194,6 +194,39 @@ export class RawMaterialsService {
     return paginate(items, total, query.page, query.limit);
   }
 
+  /**
+   * Vue globale de tous les mouvements de stock matières premières (toutes matières confondues).
+   * Utilisée par la page « Historique mouvements » pour audit / traçabilité.
+   */
+  async getAllMovements(query: QueryMovementsDto & { rawMaterialId?: string; createdById?: string }) {
+    const where: Prisma.RawStockMovementWhereInput = {};
+    if (query.rawMaterialId) where.rawMaterialId = query.rawMaterialId;
+    if (query.createdById) where.createdById = query.createdById;
+    if (query.type) where.type = query.type;
+    if (query.from || query.to) {
+      where.movementDate = {};
+      if (query.from) where.movementDate.gte = new Date(query.from);
+      if (query.to) where.movementDate.lte = new Date(query.to);
+    }
+
+    const [items, total] = await this.prisma.$transaction([
+      this.prisma.rawStockMovement.findMany({
+        where,
+        skip: query.skip,
+        take: query.take,
+        orderBy: { movementDate: 'desc' },
+        include: {
+          rawMaterial: { select: { id: true, code: true, name: true, unit: true } },
+          lot: { select: { id: true, lotNumber: true } },
+          createdBy: { select: { id: true, fullName: true } },
+        },
+      }),
+      this.prisma.rawStockMovement.count({ where }),
+    ]);
+
+    return paginate(items, total, query.page, query.limit);
+  }
+
   async getLowStock() {
     return this.prisma.rawMaterial.findMany({
       where: {

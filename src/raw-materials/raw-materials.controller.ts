@@ -53,6 +53,18 @@ export class RawMaterialsController {
     return this.service.getLowStock();
   }
 
+  @Get('movements')
+  @Roles(UserRole.DIRECTOR, UserRole.PRODUCTION_MANAGER, UserRole.OPERATOR)
+  @ApiOperation({
+    summary: 'Historique global des mouvements de stock MP (toutes matières)',
+    description:
+      "Vue d'audit consolidée : filtres par matière, type, période, utilisateur. " +
+      "Permet de retracer 'qui a fait quoi quand' sur le stock.",
+  })
+  allMovements(@Query() query: QueryMovementsDto & { rawMaterialId?: string; createdById?: string }) {
+    return this.service.getAllMovements(query);
+  }
+
   @Get('expiring')
   @Roles(UserRole.DIRECTOR, UserRole.PRODUCTION_MANAGER, UserRole.OPERATOR)
   @ApiOperation({ summary: 'Lots dont la péremption est dans moins de 7 jours' })

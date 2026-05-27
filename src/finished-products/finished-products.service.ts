@@ -163,6 +163,49 @@ export class FinishedProductsService {
     return paginate(items, total, page, limit);
   }
 
+  /**
+   * Vue globale de tous les mouvements de stock produits finis (tous produits confondus).
+   * Utilisée par la page « Historique mouvements » pour audit / traçabilité.
+   */
+  async getAllMovements(filters: {
+    page?: number;
+    limit?: number;
+    finishedProductId?: string;
+    type?: FinishedStockMovementType;
+    from?: string;
+    to?: string;
+    createdById?: string;
+  }) {
+    const page = filters.page ?? 1;
+    const limit = filters.limit ?? 50;
+    const where: Prisma.FinishedStockMovementWhereInput = {};
+    if (filters.finishedProductId) where.finishedProductId = filters.finishedProductId;
+    if (filters.type) where.type = filters.type;
+    if (filters.createdById) where.createdById = filters.createdById;
+    if (filters.from || filters.to) {
+      where.movementDate = {};
+      if (filters.from) where.movementDate.gte = new Date(filters.from);
+      if (filters.to) where.movementDate.lte = new Date(filters.to);
+    }
+
+    const [items, total] = await this.prisma.$transaction([
+      this.prisma.finishedStockMovement.findMany({
+        where,
+        skip: (page - 1) * limit,
+        take: limit,
+        orderBy: { movementDate: 'desc' },
+        include: {
+          finishedProduct: { select: { id: true, code: true, name: true, unit: true } },
+          lot: { select: { id: true, lotNumber: true } },
+          createdBy: { select: { id: true, fullName: true } },
+        },
+      }),
+      this.prisma.finishedStockMovement.count({ where }),
+    ]);
+
+    return paginate(items, total, page, limit);
+  }
+
   async getLowStock() {
     return this.prisma.finishedProduct.findMany({
       where: {

@@ -54,6 +54,32 @@ export class FinishedProductsController {
     return this.service.getLowStock();
   }
 
+  @Get('movements')
+  @Roles(UserRole.DIRECTOR, UserRole.PRODUCTION_MANAGER, UserRole.SALES_MANAGER, UserRole.OPERATOR)
+  @ApiOperation({
+    summary: 'Historique global des mouvements de stock PF (tous produits)',
+    description: "Vue d'audit consolidée pour la traçabilité.",
+  })
+  allMovements(
+    @Query('page', new DefaultValuePipe(1), ParseIntPipe) page: number,
+    @Query('limit', new DefaultValuePipe(50), ParseIntPipe) limit: number,
+    @Query('finishedProductId') finishedProductId?: string,
+    @Query('type') type?: string,
+    @Query('from') from?: string,
+    @Query('to') to?: string,
+    @Query('createdById') createdById?: string,
+  ) {
+    return this.service.getAllMovements({
+      page,
+      limit,
+      finishedProductId,
+      type: type as never,
+      from,
+      to,
+      createdById,
+    });
+  }
+
   @Get('expiring')
   @Roles(UserRole.DIRECTOR, UserRole.PRODUCTION_MANAGER, UserRole.SALES_MANAGER)
   @ApiOperation({ summary: 'Lots PF dont la péremption est proche (< 7 jours)' })
