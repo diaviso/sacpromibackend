@@ -278,6 +278,7 @@ model User {
   passwordResetTokens         PasswordResetToken[]
   breedingWeighingsCreated    BreedingWeighing[]
   breedingVaccinationsCreated BreedingVaccination[]
+  uploads                     Upload[]
 
   // Sprint 7
   accountsCreated         Account[]
@@ -347,6 +348,46 @@ model JobLock {
 
   @@index([key])
   @@map("job_locks")
+}
+
+// =====================================================
+// UPLOAD — justificatifs (scans factures, photos dépenses, contrats...)
+//
+// Les fichiers eux-mêmes sont stockés sur disque (Railway Volume en prod,
+// ./uploads en local). Cette table conserve les métadonnées pour : tracer
+// qui a uploadé, retrouver les fichiers orphelins, soft-delete, etc.
+// =====================================================
+
+enum UploadCategory {
+  PURCHASE_INVOICE_SCAN // scan facture fournisseur
+  EXPENSE_RECEIPT // reçu de dépense
+  FIXED_ASSET_DOCUMENT // facture / photo d'immobilisation
+  LOAN_CONTRACT // contrat de prêt
+  CAPITAL_DOCUMENT // preuve d'apport / décharge
+  GENERIC // autre
+}
+
+model Upload {
+  id            String         @id @default(uuid())
+  storageKey    String         @unique // nom du fichier sur disque (uuid.ext)
+  originalName  String // nom original côté utilisateur (pour download)
+  mimeType      String
+  sizeBytes     Int
+  category      UploadCategory @default(GENERIC)
+  uploadedById  String
+  // Référence métier facultative — utile pour le GC et la gestion en cascade
+  referenceType String? // ex: "PurchaseInvoice", "Expense"
+  referenceId   String?
+  createdAt     DateTime       @default(now())
+  deletedAt     DateTime? // soft-delete
+
+  uploadedBy User @relation(fields: [uploadedById], references: [id])
+
+  @@index([uploadedById])
+  @@index([referenceType, referenceId])
+  @@index([category])
+  @@index([createdAt])
+  @@map("uploads")
 }
 
 // =====================================================

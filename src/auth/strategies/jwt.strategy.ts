@@ -16,6 +16,31 @@ export interface JwtPayload {
   exp: number;
 }
 
+/**
+ * Extracteur custom : Authorization Bearer en priorité, fallback sur
+ * `?token=...` en query param.
+ *
+ * Le fallback query param sert UNIQUEMENT aux cas où le navigateur ne
+ * peut pas envoyer de header custom :
+ *  - `<img src>` pour les previews d'images uploadées
+ *  - `<a target="_blank" href>` pour télécharger un PDF
+ *
+ * Risques évalués :
+ *  - Le token apparaît dans les logs serveur si on les active sur les
+ *    query params → désactivés par défaut sur Railway/Vercel.
+ *  - Le token reste dans l'historique du navigateur → mitigé par le
+ *    TTL court (24h) et l'usage HTTPS obligatoire.
+ *  - L'utilisateur peut copier-coller l'URL et partager → fonctionne
+ *    seulement le temps du TTL.
+ */
+const extractJwtFromHeaderOrQuery = (req: Request): string | null => {
+  const fromHeader = ExtractJwt.fromAuthHeaderAsBearerToken()(req);
+  if (fromHeader) return fromHeader;
+  const queryToken = req.query?.token;
+  if (typeof queryToken === 'string' && queryToken.length > 0) return queryToken;
+  return null;
+};
+
 @Injectable()
 export class JwtStrategy extends PassportStrategy(Strategy, 'jwt') {
   constructor(
@@ -23,7 +48,7 @@ export class JwtStrategy extends PassportStrategy(Strategy, 'jwt') {
     private readonly prisma: PrismaService,
   ) {
     super({
-      jwtFromRequest: ExtractJwt.fromAuthHeaderAsBearerToken(),
+      jwtFromRequest: extractJwtFromHeaderOrQuery,
       ignoreExpiration: false,
       secretOrKey: config.get<string>('JWT_ACCESS_SECRET') ?? 'fallback-secret',
       passReqToCallback: true,
@@ -34,9 +59,8 @@ export class JwtStrategy extends PassportStrategy(Strategy, 'jwt') {
     req: Request,
     payload: JwtPayload,
   ): Promise<AuthenticatedUser> {
-    // Vérifie la blacklist : si l'access token a été révoqué (logout), on refuse.
-    const authHeader = req.headers.authorization ?? '';
-    const rawToken = authHeader.replace(/^Bearer\s+/i, '');
+    // Récupère le token tel qu'il a été utilisé pour cette requête (header OU query)
+    const rawToken = extractJwtFromHeaderOrQuery(req);
     if (rawToken) {
       const jti = crypto.createHash('sha256').update(rawToken).digest('hex');
       const revoked = await this.prisma.revokedToken.findUnique({ where: { jti } });

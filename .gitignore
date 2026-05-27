@@ -52,6 +52,9 @@ backups/
 !prisma/migrations/**/migration.sql
 *.bak
 
+# Justificatifs uploadés (en prod : Railway Volume monté sur UPLOAD_DIR)
+uploads/
+
 # Misc
 *.tsbuildinfo
 .eslintcache
