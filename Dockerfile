@@ -36,9 +36,11 @@ RUN npm run build \
 FROM node:22-alpine AS runtime
 WORKDIR /app
 
-RUN apk add --no-cache openssl libc6-compat tini \
+RUN apk add --no-cache openssl libc6-compat tini su-exec \
  && addgroup -S nodejs \
- && adduser -S nestjs -G nodejs
+ && adduser -S nestjs -G nodejs \
+ && mkdir -p /app/uploads /app/backups \
+ && chown -R nestjs:nodejs /app/uploads /app/backups
 
 ENV NODE_ENV=production
 ENV TZ=Africa/Dakar
@@ -47,13 +49,12 @@ COPY --from=build --chown=nestjs:nodejs /app/node_modules ./node_modules
 COPY --from=build --chown=nestjs:nodejs /app/dist ./dist
 COPY --from=build --chown=nestjs:nodejs /app/prisma ./prisma
 COPY --from=build --chown=nestjs:nodejs /app/package.json ./package.json
-
-USER nestjs
+COPY --from=build --chown=root:root --chmod=755 /app/docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
 
 EXPOSE 3070
 
 # Tini comme init pour propager SIGTERM proprement (Railway l'envoie au déploiement)
-ENTRYPOINT ["/sbin/tini", "--"]
+ENTRYPOINT ["/sbin/tini", "--", "/usr/local/bin/docker-entrypoint.sh"]
 
 # `release` = prisma migrate deploy && node dist/src/main
 CMD ["npm", "run", "release"]
