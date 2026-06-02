@@ -102,6 +102,20 @@ export class PurchaseOrdersService {
     }
   }
 
+  private assertNoDelivery(order: Awaited<ReturnType<PurchaseOrdersService['findOne']>>) {
+    const hasDelivery = order.items.some((item) => Number(item.quantityDelivered) > 0);
+    if (hasDelivery) {
+      throw new BadRequestException(
+        "Impossible : ce bon de commande a deja des quantites receptionnees",
+      );
+    }
+    if ((order.purchaseInvoices?.length ?? 0) > 0) {
+      throw new BadRequestException(
+        "Impossible : ce bon de commande est deja lie a une facture active",
+      );
+    }
+  }
+
   async create(dto: CreatePurchaseOrderDto, userId: string) {
     const supplier = await this.prisma.supplier.findUnique({ where: { id: dto.supplierId } });
     if (!supplier || !supplier.isActive) {
@@ -264,14 +278,25 @@ export class PurchaseOrdersService {
     });
   }
 
-  async cancel(id: string, dto: CancelPurchaseOrderDto) {
+  async invalidate(id: string) {
     const order = await this.findOne(id);
-    const hasDelivery = order.items.some((item) => Number(item.quantityDelivered) > 0);
-    if (hasDelivery) {
+    if (order.status !== PurchaseOrderStatus.VALIDATED) {
       throw new BadRequestException(
-        "Impossible d'annuler un BC ayant deja des quantites livrees. Annulez d'abord les factures liees.",
+        'Seuls les bons de commande valides et non receptionnes peuvent etre invalides',
       );
     }
+    this.assertNoDelivery(order);
+
+    return this.prisma.purchaseOrder.update({
+      where: { id },
+      data: { status: PurchaseOrderStatus.DRAFT },
+      include: { items: true, supplier: { select: { id: true, name: true } } },
+    });
+  }
+
+  async cancel(id: string, dto: CancelPurchaseOrderDto) {
+    const order = await this.findOne(id);
+    this.assertNoDelivery(order);
     if (
       order.status === PurchaseOrderStatus.DELIVERED ||
       order.status === PurchaseOrderStatus.CLOSED ||
@@ -286,6 +311,23 @@ export class PurchaseOrdersService {
         cancelReason: dto.reason,
       },
     });
+  }
+
+  async remove(id: string) {
+    const order = await this.findOne(id);
+    this.assertNoDelivery(order);
+
+    if (
+      order.status !== PurchaseOrderStatus.DRAFT &&
+      order.status !== PurchaseOrderStatus.CANCELLED
+    ) {
+      throw new BadRequestException(
+        'Seuls les bons de commande brouillons ou annules peuvent etre supprimes',
+      );
+    }
+
+    await this.prisma.purchaseOrder.delete({ where: { id } });
+    return { message: 'Bon de commande supprime', id };
   }
 
   async assertInvoiceMatchesOrder(

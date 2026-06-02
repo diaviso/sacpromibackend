@@ -1,6 +1,7 @@
 import {
   Body,
   Controller,
+  Delete,
   Get,
   Param,
   ParseUUIDPipe,
@@ -62,6 +63,13 @@ export class PurchaseOrdersController {
     return this.service.validate(id);
   }
 
+  @Patch(':id/invalidate')
+  @Roles(UserRole.DIRECTOR, UserRole.PRODUCTION_MANAGER)
+  @ApiOperation({ summary: 'Invalider un bon de commande validé non réceptionné (VALIDATED → DRAFT)' })
+  invalidate(@Param('id', new ParseUUIDPipe()) id: string) {
+    return this.service.invalidate(id);
+  }
+
   @Patch(':id/cancel')
   @Roles(UserRole.DIRECTOR, UserRole.PRODUCTION_MANAGER)
   @ApiOperation({ summary: 'Annuler un bon de commande (motif obligatoire)' })
@@ -70,5 +78,12 @@ export class PurchaseOrdersController {
     @Body() dto: CancelPurchaseOrderDto,
   ) {
     return this.service.cancel(id, dto);
+  }
+
+  @Delete(':id')
+  @Roles(UserRole.DIRECTOR, UserRole.PRODUCTION_MANAGER)
+  @ApiOperation({ summary: 'Supprimer un bon de commande non validé et non réceptionné' })
+  remove(@Param('id', new ParseUUIDPipe()) id: string) {
+    return this.service.remove(id);
   }
 }
