@@ -19,6 +19,7 @@
     "prisma:reset": "prisma migrate reset",
     "prisma:studio": "prisma studio",
     "seed": "ts-node prisma/seed.ts",
+    "seed:test-parameters": "ts-node scripts/seed-test-parameters.ts",
     "db:init": "ts-node scripts/init-db.ts",
     "db:setup": "npm run db:init && npm run seed",
     "generate-secrets": "node scripts/generate-secrets.js",

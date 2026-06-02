@@ -62,6 +62,15 @@ export class PurchaseInvoicesService {
     }
 
     return this.prisma.$transaction(async (tx) => {
+      if (dto.purchaseOrderId) {
+        await this.purchaseOrdersService.assertInvoiceMatchesOrder(
+          tx,
+          dto.purchaseOrderId,
+          dto.supplierId,
+          dto.items.map((it) => ({ rawMaterialId: it.rawMaterialId, quantity: it.quantity })),
+        );
+      }
+
       const invoiceDate = new Date(dto.invoiceDate);
       const receptionDate = new Date(dto.receptionDate);
       const reference = await this.sequence.nextReference('FA', invoiceDate.getFullYear(), tx);
@@ -131,7 +140,7 @@ export class PurchaseInvoicesService {
         await this.purchaseOrdersService.updateDeliveryFromInvoice(
           tx,
           dto.purchaseOrderId,
-          dto.items.map((it) => ({ itemName: it.itemName, quantity: it.quantity })),
+          dto.items.map((it) => ({ rawMaterialId: it.rawMaterialId, quantity: it.quantity })),
         );
       }
 
@@ -294,15 +303,14 @@ export class PurchaseInvoicesService {
 
       // Si liée à un BC, revenir en arrière sur les quantités livrées
       if (invoice.purchaseOrderId) {
-        for (const item of invoice.items) {
-          await tx.purchaseOrderItem.updateMany({
-            where: {
-              purchaseOrderId: invoice.purchaseOrderId,
-              itemName: item.itemName,
-            },
-            data: { quantityDelivered: { decrement: Number(item.quantity) } },
-          });
-        }
+        await this.purchaseOrdersService.rollbackDeliveryFromInvoice(
+          tx,
+          invoice.purchaseOrderId,
+          invoice.items.map((item) => ({
+            rawMaterialId: item.rawMaterialId,
+            quantity: Number(item.quantity),
+          })),
+        );
         // Note : on ne recalcule pas le statut du BC ici (DELIVERED → VALIDATED) —
         // ça resterait correct car le BC garde son statut historique.
       }

@@ -19,6 +19,89 @@ export class PurchaseOrdersService {
     private readonly sequence: SequenceService,
   ) {}
 
+  private ensureNoDuplicateMaterials(items: { rawMaterialId: string }[]) {
+    const seen = new Set<string>();
+    for (const item of items) {
+      if (seen.has(item.rawMaterialId)) {
+        throw new BadRequestException(
+          'Un bon de commande ne peut pas contenir deux lignes pour la meme matiere premiere',
+        );
+      }
+      seen.add(item.rawMaterialId);
+    }
+  }
+
+  private async ensureOrderMaterialsExist(
+    tx: Prisma.TransactionClient,
+    items: { rawMaterialId: string }[],
+  ) {
+    this.ensureNoDuplicateMaterials(items);
+
+    const materialIds = items.map((item) => item.rawMaterialId);
+    const materials = await tx.rawMaterial.findMany({
+      where: { id: { in: materialIds } },
+      select: { id: true, name: true, isActive: true },
+    });
+
+    if (materials.length !== materialIds.length) {
+      throw new BadRequestException(
+        "Une ou plusieurs matieres premieres du bon de commande sont introuvables",
+      );
+    }
+
+    const inactive = materials.filter((material) => !material.isActive);
+    if (inactive.length > 0) {
+      throw new BadRequestException(
+        `Matieres inactives : ${inactive.map((material) => material.name).join(', ')}`,
+      );
+    }
+  }
+
+  private aggregateInvoiceItems(items: { rawMaterialId: string; quantity: number }[]) {
+    const byMaterial = new Map<string, number>();
+    for (const item of items) {
+      byMaterial.set(
+        item.rawMaterialId,
+        (byMaterial.get(item.rawMaterialId) ?? 0) + item.quantity,
+      );
+    }
+    return byMaterial;
+  }
+
+  private async recalculateDeliveryStatus(
+    tx: Prisma.TransactionClient,
+    purchaseOrderId: string,
+  ) {
+    const order = await tx.purchaseOrder.findUnique({
+      where: { id: purchaseOrderId },
+      include: { items: true },
+    });
+    if (!order) return;
+    if (
+      order.status === PurchaseOrderStatus.CANCELLED ||
+      order.status === PurchaseOrderStatus.CLOSED
+    ) {
+      return;
+    }
+
+    const allDelivered = order.items.every(
+      (item) => Number(item.quantityDelivered) >= Number(item.quantityOrdered),
+    );
+    const someDelivered = order.items.some((item) => Number(item.quantityDelivered) > 0);
+    const status = allDelivered
+      ? PurchaseOrderStatus.DELIVERED
+      : someDelivered
+        ? PurchaseOrderStatus.PARTIALLY_DELIVERED
+        : PurchaseOrderStatus.VALIDATED;
+
+    if (status !== order.status) {
+      await tx.purchaseOrder.update({
+        where: { id: purchaseOrderId },
+        data: { status },
+      });
+    }
+  }
+
   async create(dto: CreatePurchaseOrderDto, userId: string) {
     const supplier = await this.prisma.supplier.findUnique({ where: { id: dto.supplierId } });
     if (!supplier || !supplier.isActive) {
@@ -26,12 +109,13 @@ export class PurchaseOrdersService {
     }
 
     return this.prisma.$transaction(async (tx) => {
+      await this.ensureOrderMaterialsExist(tx, dto.items);
+
       const orderDate = new Date(dto.orderDate);
       const reference = await this.sequence.nextReference('BC', orderDate.getFullYear(), tx);
 
       const totalAmount = dto.items.reduce(
-        (sum, item) =>
-          sum + Math.round(item.quantityOrdered * item.unitPriceEstimate),
+        (sum, item) => sum + Math.round(item.quantityOrdered * item.unitPriceEstimate),
         0,
       );
 
@@ -73,7 +157,6 @@ export class PurchaseOrdersService {
       if (query.to) where.orderDate.lte = new Date(query.to);
     }
 
-    // Recherche : sur la référence du BC, le nom du fournisseur et la note
     if (query.search && query.search.trim()) {
       const term = query.search.trim();
       where.OR = [
@@ -112,6 +195,7 @@ export class PurchaseOrdersService {
         supplier: true,
         createdBy: { select: { id: true, fullName: true, email: true } },
         purchaseInvoices: {
+          where: { deletedAt: null },
           select: { id: true, reference: true, totalAmount: true, paymentStatus: true },
         },
       },
@@ -126,12 +210,13 @@ export class PurchaseOrdersService {
     const order = await this.findOne(id);
     if (order.status !== PurchaseOrderStatus.DRAFT) {
       throw new BadRequestException(
-        'Seuls les bons de commande en statut DRAFT peuvent être modifiés',
+        'Seuls les bons de commande en statut DRAFT peuvent etre modifies',
       );
     }
 
     return this.prisma.$transaction(async (tx) => {
       if (dto.items) {
+        await this.ensureOrderMaterialsExist(tx, dto.items);
         await tx.purchaseOrderItem.deleteMany({ where: { purchaseOrderId: id } });
       }
 
@@ -170,9 +255,7 @@ export class PurchaseOrdersService {
   async validate(id: string) {
     const order = await this.findOne(id);
     if (order.status !== PurchaseOrderStatus.DRAFT) {
-      throw new BadRequestException(
-        'Seuls les bons de commande DRAFT peuvent être validés',
-      );
+      throw new BadRequestException('Seuls les bons de commande DRAFT peuvent etre valides');
     }
     return this.prisma.purchaseOrder.update({
       where: { id },
@@ -183,14 +266,18 @@ export class PurchaseOrdersService {
 
   async cancel(id: string, dto: CancelPurchaseOrderDto) {
     const order = await this.findOne(id);
+    const hasDelivery = order.items.some((item) => Number(item.quantityDelivered) > 0);
+    if (hasDelivery) {
+      throw new BadRequestException(
+        "Impossible d'annuler un BC ayant deja des quantites livrees. Annulez d'abord les factures liees.",
+      );
+    }
     if (
       order.status === PurchaseOrderStatus.DELIVERED ||
       order.status === PurchaseOrderStatus.CLOSED ||
       order.status === PurchaseOrderStatus.CANCELLED
     ) {
-      throw new BadRequestException(
-        `Impossible d'annuler un BC en statut ${order.status}`,
-      );
+      throw new BadRequestException(`Impossible d'annuler un BC en statut ${order.status}`);
     }
     return this.prisma.purchaseOrder.update({
       where: { id },
@@ -201,15 +288,72 @@ export class PurchaseOrdersService {
     });
   }
 
-  /**
-   * Met à jour les quantités livrées des lignes du BC à partir d'une facture d'achat.
-   * Recalcule le statut : DELIVERED si tout livré, PARTIALLY_DELIVERED si partiel, sinon inchangé.
-   * À appeler dans une transaction Prisma (depuis purchase-invoices).
-   */
+  async assertInvoiceMatchesOrder(
+    tx: Prisma.TransactionClient,
+    purchaseOrderId: string,
+    supplierId: string,
+    invoiceItems: { rawMaterialId: string; quantity: number }[],
+  ) {
+    const order = await tx.purchaseOrder.findUnique({
+      where: { id: purchaseOrderId },
+      include: { items: true },
+    });
+    if (!order) {
+      throw new BadRequestException('Bon de commande introuvable');
+    }
+    if (order.supplierId !== supplierId) {
+      throw new BadRequestException(
+        "Le fournisseur de la facture ne correspond pas a celui du bon de commande",
+      );
+    }
+    if (
+      order.status !== PurchaseOrderStatus.VALIDATED &&
+      order.status !== PurchaseOrderStatus.PARTIALLY_DELIVERED
+    ) {
+      throw new BadRequestException(
+        'Seuls les bons de commande valides ou partiellement livres peuvent etre factures',
+      );
+    }
+
+    const orderItemsByMaterial = new Map<string, (typeof order.items)[number]>();
+    for (const item of order.items) {
+      if (!item.rawMaterialId) {
+        throw new BadRequestException(
+          `Le bon de commande ${order.reference} contient une ligne sans matiere premiere liee`,
+        );
+      }
+      if (orderItemsByMaterial.has(item.rawMaterialId)) {
+        throw new BadRequestException(
+          `Le bon de commande ${order.reference} contient plusieurs lignes pour la meme matiere premiere`,
+        );
+      }
+      orderItemsByMaterial.set(item.rawMaterialId, item);
+    }
+
+    const invoiceQuantities = this.aggregateInvoiceItems(invoiceItems);
+    for (const [rawMaterialId, invoiceQuantity] of invoiceQuantities) {
+      const orderItem = orderItemsByMaterial.get(rawMaterialId);
+      if (!orderItem) {
+        throw new BadRequestException(
+          'La facture contient une matiere premiere qui ne figure pas dans le bon de commande',
+        );
+      }
+
+      const remaining = Number(orderItem.quantityOrdered) - Number(orderItem.quantityDelivered);
+      if (invoiceQuantity > remaining + 0.000001) {
+        throw new BadRequestException(
+          `Quantite recue trop elevee pour ${orderItem.itemName}. Reste a livrer : ${remaining}`,
+        );
+      }
+    }
+
+    return order;
+  }
+
   async updateDeliveryFromInvoice(
     tx: Prisma.TransactionClient,
     purchaseOrderId: string,
-    invoiceItems: { itemName: string; quantity: number }[],
+    invoiceItems: { rawMaterialId: string; quantity: number }[],
   ) {
     const order = await tx.purchaseOrder.findUnique({
       where: { id: purchaseOrderId },
@@ -217,10 +361,10 @@ export class PurchaseOrdersService {
     });
     if (!order) return;
 
-    for (const orderItem of order.items) {
-      const matching = invoiceItems.filter((it) => it.itemName === orderItem.itemName);
-      const additionalDelivered = matching.reduce((sum, it) => sum + it.quantity, 0);
-      if (additionalDelivered > 0) {
+    const invoiceQuantities = this.aggregateInvoiceItems(invoiceItems);
+    for (const [rawMaterialId, additionalDelivered] of invoiceQuantities) {
+      const orderItem = order.items.find((item) => item.rawMaterialId === rawMaterialId);
+      if (orderItem && additionalDelivered > 0) {
         await tx.purchaseOrderItem.update({
           where: { id: orderItem.id },
           data: {
@@ -232,29 +376,36 @@ export class PurchaseOrdersService {
       }
     }
 
-    const refreshed = await tx.purchaseOrder.findUnique({
+    await this.recalculateDeliveryStatus(tx, purchaseOrderId);
+  }
+
+  async rollbackDeliveryFromInvoice(
+    tx: Prisma.TransactionClient,
+    purchaseOrderId: string,
+    invoiceItems: { rawMaterialId: string; quantity: number }[],
+  ) {
+    const order = await tx.purchaseOrder.findUnique({
       where: { id: purchaseOrderId },
       include: { items: true },
     });
-    if (!refreshed) return;
+    if (!order) return;
 
-    const allDelivered = refreshed.items.every(
-      (it) => Number(it.quantityDelivered) >= Number(it.quantityOrdered),
-    );
-    const someDelivered = refreshed.items.some((it) => Number(it.quantityDelivered) > 0);
-
-    let newStatus: PurchaseOrderStatus | undefined;
-    if (allDelivered) {
-      newStatus = PurchaseOrderStatus.DELIVERED;
-    } else if (someDelivered) {
-      newStatus = PurchaseOrderStatus.PARTIALLY_DELIVERED;
+    const invoiceQuantities = this.aggregateInvoiceItems(invoiceItems);
+    for (const [rawMaterialId, deliveredToRollback] of invoiceQuantities) {
+      const orderItem = order.items.find((item) => item.rawMaterialId === rawMaterialId);
+      if (orderItem && deliveredToRollback > 0) {
+        await tx.purchaseOrderItem.update({
+          where: { id: orderItem.id },
+          data: {
+            quantityDelivered: Math.max(
+              0,
+              Number(orderItem.quantityDelivered) - deliveredToRollback,
+            ),
+          },
+        });
+      }
     }
 
-    if (newStatus && newStatus !== refreshed.status) {
-      await tx.purchaseOrder.update({
-        where: { id: purchaseOrderId },
-        data: { status: newStatus },
-      });
-    }
+    await this.recalculateDeliveryStatus(tx, purchaseOrderId);
   }
 }

@@ -15,12 +15,11 @@ import {
 } from 'class-validator';
 
 export class CreatePurchaseOrderItemDto {
-  @ApiPropertyOptional({ description: 'ID de la matière première (optionnel pour BC libres)' })
-  @IsOptional()
+  @ApiProperty({ description: 'ID de la matiere premiere commandee' })
   @IsUUID()
-  rawMaterialId?: string;
+  rawMaterialId!: string;
 
-  @ApiProperty({ example: 'Maïs jaune' })
+  @ApiProperty({ example: 'Mais jaune' })
   @IsString()
   @MaxLength(150)
   itemName!: string;
@@ -30,12 +29,12 @@ export class CreatePurchaseOrderItemDto {
   @MaxLength(20)
   unit!: string;
 
-  @ApiProperty({ example: 1000, description: 'Quantité commandée' })
+  @ApiProperty({ example: 1000, description: 'Quantite commandee' })
   @IsNumber({ maxDecimalPlaces: 4 })
   @Min(0.0001)
   quantityOrdered!: number;
 
-  @ApiProperty({ example: 250, description: 'Prix unitaire estimé (FCFA, entier)' })
+  @ApiProperty({ example: 250, description: 'Prix unitaire estime (FCFA, entier)' })
   @IsInt()
   @Min(0)
   unitPriceEstimate!: number;
