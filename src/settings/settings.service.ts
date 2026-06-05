@@ -14,6 +14,11 @@ export class SettingsService {
    * Retourne la fiche entreprise (singleton). Crée une ligne vierge à la
    * volée si la base n'en a pas encore — comme ça les PDF marchent dès le
    * premier déploiement, et l'utilisateur n'a qu'à compléter.
+   *
+   * Garbage-collect du logo orphelin : si `logoUploadId` pointe vers un
+   * Upload qui n'existe plus ou a été soft-deleted (cas Railway sans Volume
+   * persistant), on auto-corrige à `null` en base ET on retourne null dans
+   * la réponse. Le frontend ne tentera plus de fetch un fichier 404.
    */
   async get() {
     let settings = await this.prisma.companySettings.findUnique({
@@ -33,6 +38,25 @@ export class SettingsService {
         include: { updatedBy: { select: { id: true, fullName: true } } },
       });
     }
+
+    // Logo orphelin → on nettoie pour eviter les 404 cote frontend.
+    if (settings?.logoUploadId) {
+      const upload = await this.prisma.upload.findFirst({
+        where: { id: settings.logoUploadId, deletedAt: null },
+        select: { id: true },
+      });
+      if (!upload) {
+        this.logger.warn(
+          `Logo upload ${settings.logoUploadId} introuvable — nettoyage en base`,
+        );
+        await this.prisma.companySettings.update({
+          where: { id: SINGLETON_ID },
+          data: { logoUploadId: null },
+        });
+        settings = { ...settings, logoUploadId: null };
+      }
+    }
+
     return settings;
   }
 
