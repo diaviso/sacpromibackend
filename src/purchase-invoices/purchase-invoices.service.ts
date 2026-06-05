@@ -79,7 +79,26 @@ export class PurchaseInvoicesService {
         (sum, item) => sum + Math.round(item.quantity * item.unitPrice),
         0,
       );
-      const totalTransportCost = dto.items.reduce(
+
+      // Si l'UI a fourni un frais transport global, on le répartit au prorata
+      // du montant HT de chaque ligne. Reste sur la première ligne pour gérer
+      // les arrondis (somme reste = montant global).
+      const itemsWithTransport = dto.items.map((it) => ({ ...it }));
+      if (dto.transportCostTotal && dto.transportCostTotal > 0 && totalAmount > 0) {
+        let allocated = 0;
+        for (let i = 0; i < itemsWithTransport.length; i++) {
+          const it = itemsWithTransport[i];
+          const lineHT = Math.round(it.quantity * it.unitPrice);
+          const share =
+            i === itemsWithTransport.length - 1
+              ? dto.transportCostTotal - allocated
+              : Math.round((dto.transportCostTotal * lineHT) / totalAmount);
+          it.transportCost = (it.transportCost ?? 0) + share;
+          allocated += share;
+        }
+      }
+
+      const totalTransportCost = itemsWithTransport.reduce(
         (sum, item) => sum + (item.transportCost ?? 0),
         0,
       );
@@ -99,7 +118,7 @@ export class PurchaseInvoicesService {
           scanUrl: dto.scanUrl,
           createdById: userId,
           items: {
-            create: dto.items.map((item) => ({
+            create: itemsWithTransport.map((item) => ({
               rawMaterialId: item.rawMaterialId,
               itemName: item.itemName,
               quantity: item.quantity,
@@ -116,8 +135,8 @@ export class PurchaseInvoicesService {
       });
 
       // Créer un lot par ligne + entrée stock + recalcul prix moyen pondéré
-      for (let i = 0; i < dto.items.length; i++) {
-        const item = dto.items[i];
+      for (let i = 0; i < itemsWithTransport.length; i++) {
+        const item = itemsWithTransport[i];
         const lotNumber =
           item.lotNumber ?? `${reference}-L${(i + 1).toString().padStart(2, '0')}`;
 

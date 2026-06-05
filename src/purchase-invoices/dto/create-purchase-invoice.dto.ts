@@ -89,6 +89,16 @@ export class CreatePurchaseInvoiceDto {
   @IsUrl({ require_tld: false })
   scanUrl?: string;
 
+  @ApiPropertyOptional({
+    example: 25000,
+    description:
+      "Frais de transport global pour toute la facture (FCFA). Sera réparti au prorata des montants HT sur les lignes. Alternative pratique à transportCost par ligne — les deux peuvent coexister mais on évite.",
+  })
+  @IsOptional()
+  @IsInt()
+  @Min(0)
+  transportCostTotal?: number;
+
   @ApiProperty({ type: [CreatePurchaseInvoiceItemDto] })
   @IsArray()
   @ArrayMinSize(1)

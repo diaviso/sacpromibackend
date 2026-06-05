@@ -70,6 +70,13 @@ export class PurchaseOrdersController {
     return this.service.invalidate(id);
   }
 
+  @Patch(':id/reactivate')
+  @Roles(UserRole.DIRECTOR, UserRole.PRODUCTION_MANAGER)
+  @ApiOperation({ summary: 'Remettre en circuit un bon de commande annulé (CANCELLED → DRAFT)' })
+  reactivate(@Param('id', new ParseUUIDPipe()) id: string) {
+    return this.service.reactivate(id);
+  }
+
   @Patch(':id/cancel')
   @Roles(UserRole.DIRECTOR, UserRole.PRODUCTION_MANAGER)
   @ApiOperation({ summary: 'Annuler un bon de commande (motif obligatoire)' })

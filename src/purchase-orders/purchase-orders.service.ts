@@ -294,6 +294,33 @@ export class PurchaseOrdersService {
     });
   }
 
+  /**
+   * Remet un BC annulé dans le circuit (CANCELLED → DRAFT).
+   *
+   * Le BC redevient modifiable et peut être re-validé ensuite. Le motif
+   * d'annulation est effacé. Réservé aux rôles autorisés.
+   * Refuse si le BC a déjà été partiellement livré (devrait être impossible
+   * pour un CANCELLED, mais on garde la sécurité).
+   */
+  async reactivate(id: string) {
+    const order = await this.findOne(id);
+    if (order.status !== PurchaseOrderStatus.CANCELLED) {
+      throw new BadRequestException(
+        'Seuls les bons de commande annulés peuvent être remis en circuit',
+      );
+    }
+    this.assertNoDelivery(order);
+
+    return this.prisma.purchaseOrder.update({
+      where: { id },
+      data: {
+        status: PurchaseOrderStatus.DRAFT,
+        cancelReason: null,
+      },
+      include: { items: true, supplier: { select: { id: true, name: true } } },
+    });
+  }
+
   async cancel(id: string, dto: CancelPurchaseOrderDto) {
     const order = await this.findOne(id);
     this.assertNoDelivery(order);
