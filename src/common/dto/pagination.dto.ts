@@ -11,16 +11,17 @@ export class PaginationDto {
   page: number = 1;
 
   @ApiPropertyOptional({
-    description: "Nombre d'éléments par page",
+    description:
+      "Nombre d'éléments par page. Plafond élevé (1000) pour permettre les exports CSV/PDF complets depuis la page États & Exports.",
     default: 20,
     minimum: 1,
-    maximum: 100,
+    maximum: 1000,
   })
   @IsOptional()
   @Type(() => Number)
   @IsInt()
   @Min(1)
-  @Max(100)
+  @Max(1000)
   limit: number = 20;
 
   get skip(): number {

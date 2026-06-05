@@ -139,6 +139,11 @@ export class UploadsController {
       'Content-Disposition': `inline; filename*=UTF-8''${safeName}`,
       'Content-Length': buffer.length.toString(),
       'Cache-Control': 'private, max-age=300',
+      // Helmet pose `Cross-Origin-Resource-Policy: same-origin` par défaut,
+      // ce qui empêche le frontend Vercel de charger via <img src> les fichiers
+      // servis depuis Railway. On rouvre EXPLICITEMENT pour ces téléchargements
+      // (le token JWT dans la query string protège l'accès).
+      'Cross-Origin-Resource-Policy': 'cross-origin',
     });
     res.end(buffer);
   }
