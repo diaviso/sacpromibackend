@@ -34,6 +34,7 @@ import { LoansModule } from './loans/loans.module';
 import { FixedAssetsModule } from './fixed-assets/fixed-assets.module';
 import { CapitalMovementsModule } from './capital-movements/capital-movements.module';
 import { UploadsModule } from './uploads/uploads.module';
+import { SettingsModule } from './settings/settings.module';
 import { JwtAuthGuard } from './auth/guards/jwt-auth.guard';
 import { RolesGuard } from './common/guards/roles.guard';
 
@@ -77,6 +78,7 @@ import { RolesGuard } from './common/guards/roles.guard';
     FixedAssetsModule,
     CapitalMovementsModule,
     UploadsModule,
+    SettingsModule,
   ],
   providers: [
     { provide: APP_GUARD, useClass: JwtAuthGuard },

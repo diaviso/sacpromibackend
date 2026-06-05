@@ -289,6 +289,7 @@ model User {
   depreciationsCreated    DepreciationEntry[]
   capitalMovementsCreated CapitalMovement[]
   accountTransfersCreated AccountTransfer[]
+  companySettingsUpdated  CompanySettings[] @relation("CompanySettingsUpdatedBy")
 
   @@index([email])
   @@index([role])
@@ -1546,4 +1547,57 @@ model CapitalMovement {
   @@index([accountId])
   @@index([movementDate])
   @@map("capital_movements")
+}
+
+// =====================================================
+// PARAMÈTRES ENTREPRISE (singleton)
+// =====================================================
+//
+// Une seule ligne en base (id forcé à "default"). Toutes les infos qui doivent
+// apparaître sur les documents générés (PDF facture/reçu/BC/rapports).
+//
+// Chargé en cache côté frontend via /api/settings/company. Modifiable seulement
+// par le DIRECTOR depuis la page Paramètres.
+model CompanySettings {
+  // Toujours "default" — singleton imposé au niveau service
+  id String @id @default("default")
+
+  // ─── Identité ───
+  companyName     String
+  legalForm       String? // SARL, SA, SUARL, GIE…
+  ninea           String? // N° d'Identification National des Entreprises et Associations (SN)
+  rccm            String? // Registre du Commerce et du Crédit Mobilier
+  taxId           String? // NIF / TVA si applicable
+
+  // ─── Coordonnées ───
+  addressLine1 String?
+  addressLine2 String?
+  city         String?
+  region       String?
+  country      String? @default("Sénégal")
+  phone        String?
+  phone2       String?
+  email        String?
+  website      String?
+
+  // ─── Banque / paiement ───
+  bankName    String?
+  bankAccount String? // RIB ou IBAN
+  mobileMoney String? // ex : "Wave 77 123 45 67"
+
+  // ─── Branding ───
+  logoUploadId    String? // FK → Upload (catégorie GENERIC)
+  primaryColor    String? @default("#047857") // accent des PDF — hex
+  secondaryColor  String? @default("#0ea5e9") // accent secondaire des PDF
+
+  // ─── Textes affichés en pied de document ───
+  footerLegalText  String? @db.Text // mentions légales, conditions
+  footerNote       String? @db.Text // "Merci pour votre confiance" etc.
+
+  // ─── Audit ───
+  updatedAt   DateTime @updatedAt
+  updatedById String?
+  updatedBy   User?    @relation("CompanySettingsUpdatedBy", fields: [updatedById], references: [id])
+
+  @@map("company_settings")
 }
