@@ -4,19 +4,28 @@ import {
   ExceptionFilter,
   HttpException,
   HttpStatus,
+  Injectable,
   Logger,
+  Optional,
 } from '@nestjs/common';
-import { Prisma } from '@prisma/client';
+import { AuditAction, Prisma } from '@prisma/client';
 import { Request, Response } from 'express';
+import { AuditService } from '../../audit/audit.service';
+import { AuthenticatedUser } from '../decorators/current-user.decorator';
 
+@Injectable()
 @Catch()
 export class HttpExceptionFilter implements ExceptionFilter {
   private readonly logger = new Logger(HttpExceptionFilter.name);
 
+  // Optional pour rester compatible si AuditService n'est pas encore injecté
+  // (cas legacy : useGlobalFilters(new HttpExceptionFilter())).
+  constructor(@Optional() private readonly audit?: AuditService) {}
+
   catch(exception: unknown, host: ArgumentsHost): void {
     const ctx = host.switchToHttp();
     const response = ctx.getResponse<Response>();
-    const request = ctx.getRequest<Request>();
+    const request = ctx.getRequest<Request & { user?: AuthenticatedUser }>();
 
     let status = HttpStatus.INTERNAL_SERVER_ERROR;
     let message: string | string[] = 'Erreur interne du serveur';
@@ -73,5 +82,35 @@ export class HttpExceptionFilter implements ExceptionFilter {
       timestamp: new Date().toISOString(),
       path: request.url,
     });
+
+    // Audit : on capture les refus de Guards (401/403) ainsi que toute autre
+    // exception qui ne passe pas par l'AuditInterceptor (handler levée). Pour
+    // les requêtes audit elles-mêmes (qui appellent /audit-logs), pas besoin.
+    const reqWithFlag = request as Request & { __auditLogged?: boolean };
+    if (this.audit && status >= 400 && !reqWithFlag.__auditLogged) {
+      const method = (request.method ?? 'GET').toUpperCase();
+      const isMutation = ['POST', 'PATCH', 'PUT', 'DELETE'].includes(method);
+      // On ne log QUE les mutations + les 401/403 (sinon GET-spam)
+      if (isMutation || status === 401 || status === 403) {
+        const path = (request.originalUrl || request.url || '').split('?')[0];
+        const u = request.user;
+        this.audit.log({
+          action: status === 401 || status === 403 ? AuditAction.OTHER : AuditAction.OTHER,
+          userId: u?.id ?? null,
+          userEmail: u?.email ?? null,
+          userRole: u?.role ?? null,
+          method,
+          path,
+          ipAddress:
+            (request.headers['x-forwarded-for'] as string)?.split(',')[0]?.trim() ||
+            request.ip ||
+            null,
+          userAgent: (request.headers['user-agent'] as string | undefined) ?? null,
+          statusCode: status,
+          errorMessage: typeof message === 'string' ? message : JSON.stringify(message),
+          metadata: { reason: 'guard-or-filter' },
+        });
+      }
+    }
   }
 }

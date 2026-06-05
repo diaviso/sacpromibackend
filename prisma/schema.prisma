@@ -19,6 +19,30 @@ enum UserRole {
   OPERATOR
 }
 
+// Catégorie haute des actions auditées. Le mapping HTTP→action se fait dans
+// l'AuditInterceptor (POST → CREATE, PATCH → UPDATE, DELETE → DELETE etc.)
+// et des libellés spécifiques sont posés explicitement depuis les services
+// pour les opérations métier sensibles (cancel, validate, password change…).
+enum AuditAction {
+  CREATE
+  UPDATE
+  DELETE
+  CANCEL
+  REACTIVATE
+  VALIDATE
+  INVALIDATE
+  LOGIN
+  LOGIN_FAILED
+  LOGOUT
+  PASSWORD_CHANGE
+  PASSWORD_RESET
+  ROLE_CHANGE
+  ACTIVATE
+  DEACTIVATE
+  EXPORT
+  OTHER
+}
+
 enum PurchaseOrderStatus {
   DRAFT
   VALIDATED
@@ -290,6 +314,7 @@ model User {
   capitalMovementsCreated CapitalMovement[]
   accountTransfersCreated AccountTransfer[]
   companySettingsUpdated  CompanySettings[] @relation("CompanySettingsUpdatedBy")
+  auditLogs               AuditLog[]
 
   @@index([email])
   @@index([role])
@@ -1600,4 +1625,56 @@ model CompanySettings {
   updatedBy   User?    @relation("CompanySettingsUpdatedBy", fields: [updatedById], references: [id])
 
   @@map("company_settings")
+}
+
+// =====================================================
+// AUDIT LOG — journal "qui a fait quoi, quand et comment"
+// =====================================================
+//
+// Ecrit en arriere-plan par AuditInterceptor (mutations HTTP) et par
+// certains services pour les actions metier sensibles (cancel, validate,
+// login fail, etc.). Lecture seule cote API, reservee au DIRECTOR.
+//
+// Le snapshot userEmail/userRole permet de conserver l'info meme apres
+// suppression de l'utilisateur (le FK est SET NULL pour ne pas faire
+// disparaitre la ligne d'audit).
+model AuditLog {
+  id String @id @default(uuid())
+
+  // ─── Qui ───
+  userId    String?
+  userEmail String? // snapshot (au cas où l'user est supprimé ensuite)
+  userRole  String? // snapshot du rôle au moment de l'action
+
+  // ─── Quoi ───
+  action     AuditAction
+  entityType String? // "PurchaseInvoice", "Sale", "User", "CompanySettings"…
+  entityId   String? // UUID référence si applicable
+
+  // ─── Comment ───
+  method    String // GET, POST, PATCH, DELETE
+  path      String // chemin REST (sans query)
+  ipAddress String?
+  userAgent String? @db.Text
+
+  // ─── Résultat ───
+  statusCode Int // 200, 400, 403, 500…
+  durationMs Int?
+
+  // ─── Détails libres ───
+  // metadata contient : payload requete masque (password, token expurgés),
+  // motif (cancelReason…), diff before/after pour les UPDATE critiques, etc.
+  metadata     Json?
+  errorMessage String? @db.Text // si statusCode >= 400
+
+  // ─── Quand ───
+  createdAt DateTime @default(now())
+
+  user User? @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([userId])
+  @@index([action])
+  @@index([entityType, entityId])
+  @@index([createdAt])
+  @@map("audit_logs")
 }

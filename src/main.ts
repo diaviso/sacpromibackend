@@ -5,7 +5,6 @@ import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
 import { ConfigService } from '@nestjs/config';
 import helmet from 'helmet';
 import { AppModule } from './app.module';
-import { HttpExceptionFilter } from './common/filters/http-exception.filter';
 import { TransformInterceptor } from './common/interceptors/transform.interceptor';
 
 async function bootstrap() {
@@ -67,7 +66,8 @@ async function bootstrap() {
     }),
   );
 
-  app.useGlobalFilters(new HttpExceptionFilter());
+  // HttpExceptionFilter est enregistre comme APP_FILTER dans AppModule
+  // pour beneficier de l'injection AuditService.
   app.useGlobalInterceptors(new TransformInterceptor());
 
   // Swagger : exposé en dev par défaut, désactivable en prod via SWAGGER_ENABLED=false
