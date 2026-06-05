@@ -38,14 +38,15 @@ export class RolesGuard implements CanActivate {
       return true;
     }
 
-    const requiredRoles = this.reflector.getAllAndOverride<UserRole[] | undefined>(
-      ROLES_KEY,
-      [handler, klass],
-    );
-    const anyAuthenticated = this.reflector.getAllAndOverride<boolean>(
-      ANY_AUTHENTICATED_KEY,
-      [handler, klass],
-    );
+    // On lit séparément handler et class pour donner PRIORITÉ aux
+    // décorateurs posés sur le handler. Sans ça, un controller déclaré
+    // `@Roles(DIRECTOR)` au niveau classe écraserait un `@AnyAuthenticated()`
+    // posé sur une méthode précise (cas de UsersController#findOne, où chaque
+    // utilisateur doit pouvoir consulter SA propre fiche).
+    const rolesOnHandler = this.reflector.get<UserRole[] | undefined>(ROLES_KEY, handler);
+    const anyAuthOnHandler = this.reflector.get<boolean>(ANY_AUTHENTICATED_KEY, handler);
+    const rolesOnClass = this.reflector.get<UserRole[] | undefined>(ROLES_KEY, klass);
+    const anyAuthOnClass = this.reflector.get<boolean>(ANY_AUTHENTICATED_KEY, klass);
 
     const request = context.switchToHttp().getRequest<{ user?: AuthenticatedUser }>();
     const user = request.user;
@@ -54,16 +55,29 @@ export class RolesGuard implements CanActivate {
       throw new ForbiddenException('Utilisateur non authentifié');
     }
 
-    if (requiredRoles && requiredRoles.length > 0) {
-      if (!requiredRoles.includes(user.role)) {
+    // 1. Handler @AnyAuthenticated() → laisse passer (override classe).
+    if (anyAuthOnHandler) {
+      return true;
+    }
+    // 2. Handler @Roles(...) → contrôle strict (override classe).
+    if (rolesOnHandler && rolesOnHandler.length > 0) {
+      if (!rolesOnHandler.includes(user.role)) {
         throw new ForbiddenException(
-          `Accès refusé : rôle requis (${requiredRoles.join(', ')}), rôle actuel : ${user.role}`,
+          `Accès refusé : rôle requis (${rolesOnHandler.join(', ')}), rôle actuel : ${user.role}`,
         );
       }
       return true;
     }
-
-    if (anyAuthenticated) {
+    // 3. Sinon, on retombe sur la politique de la classe.
+    if (rolesOnClass && rolesOnClass.length > 0) {
+      if (!rolesOnClass.includes(user.role)) {
+        throw new ForbiddenException(
+          `Accès refusé : rôle requis (${rolesOnClass.join(', ')}), rôle actuel : ${user.role}`,
+        );
+      }
+      return true;
+    }
+    if (anyAuthOnClass) {
       return true;
     }
 

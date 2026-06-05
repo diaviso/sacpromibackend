@@ -1,6 +1,7 @@
 import {
   Body,
   Controller,
+  ForbiddenException,
   Get,
   Param,
   ParseUUIDPipe,
@@ -15,6 +16,11 @@ import { CreateUserDto } from './dto/create-user.dto';
 import { UpdateUserDto } from './dto/update-user.dto';
 import { QueryUsersDto } from './dto/query-users.dto';
 import { Roles } from '../common/decorators/roles.decorator';
+import { AnyAuthenticated } from '../common/decorators/any-authenticated.decorator';
+import {
+  AuthenticatedUser,
+  CurrentUser,
+} from '../common/decorators/current-user.decorator';
 
 @ApiTags('Users')
 @ApiBearerAuth('JWT-auth')
@@ -36,8 +42,18 @@ export class UsersController {
   }
 
   @Get(':id')
-  @ApiOperation({ summary: "Détail d'un utilisateur" })
-  findOne(@Param('id', new ParseUUIDPipe()) id: string) {
+  @AnyAuthenticated()
+  @ApiOperation({
+    summary:
+      "Détail d'un utilisateur. Le DIRECTOR voit n'importe quel profil ; tout autre rôle ne peut voir QUE sa propre fiche (page \"Mon profil\").",
+  })
+  findOne(
+    @Param('id', new ParseUUIDPipe()) id: string,
+    @CurrentUser() user: AuthenticatedUser,
+  ) {
+    if (user.role !== UserRole.DIRECTOR && user.id !== id) {
+      throw new ForbiddenException('Vous ne pouvez consulter que votre propre profil');
+    }
     return this.usersService.findOne(id);
   }
 
