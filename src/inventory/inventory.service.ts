@@ -1,6 +1,7 @@
 import {
   BadRequestException,
   Injectable,
+  Logger,
   NotFoundException,
 } from '@nestjs/common';
 import { InventoryStatus, InventoryType, Prisma } from '@prisma/client';
@@ -16,6 +17,8 @@ const VARIANCE_ALERT_PERCENT = 5;
 
 @Injectable()
 export class InventoryService {
+  private readonly logger = new Logger(InventoryService.name);
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly sequence: SequenceService,
@@ -181,6 +184,9 @@ export class InventoryService {
             actualStock: actual,
             variance,
             variancePercent: Math.round(variancePercent * 100) / 100,
+            // Si l'écart est nul, on efface le motif éventuel pour éviter
+            // d'avoir un motif orphelin sur une ligne sans écart.
+            varianceReason: variance === 0 ? null : (dtoItem.varianceReason ?? null),
           },
         });
       }
@@ -272,5 +278,57 @@ export class InventoryService {
 
       return { inventory: validated, significantVariances };
     });
+  }
+
+  /**
+   * Annule un inventaire NON VALIDÉ. Aucun ajustement de stock n'a encore
+   * été appliqué, on se contente donc de changer le statut et conserver
+   * le motif pour audit. L'inventaire reste consultable.
+   *
+   * Refuse si l'inventaire est déjà VALIDATED — un inventaire validé a
+   * déjà ajusté les stocks et l'annulation devrait alors être faite via
+   * un nouvel inventaire correctif, pas en effaçant l'historique.
+   */
+  async cancel(id: string, reason: string, userId: string) {
+    if (!reason || reason.trim().length < 3) {
+      throw new BadRequestException(
+        "Motif d'annulation obligatoire (minimum 3 caractères)",
+      );
+    }
+    const inventory = await this.findOne(id);
+    if (inventory.status === InventoryStatus.VALIDATED) {
+      throw new BadRequestException(
+        "Impossible d'annuler un inventaire déjà validé. Créez un nouvel inventaire correctif.",
+      );
+    }
+    if (inventory.status === InventoryStatus.CANCELLED) {
+      throw new BadRequestException('Inventaire déjà annulé');
+    }
+    this.logger.warn(
+      `Inventaire ${inventory.reference} annulé par user ${userId} — motif : ${reason}`,
+    );
+    return this.prisma.inventory.update({
+      where: { id },
+      data: {
+        status: InventoryStatus.CANCELLED,
+        cancelReason: reason.trim(),
+      },
+    });
+  }
+
+  /**
+   * Supprime définitivement un inventaire NON VALIDÉ (cascade sur les
+   * items via le schéma Prisma). À utiliser après une annulation par
+   * exemple. Strictement DIRECTOR.
+   */
+  async remove(id: string) {
+    const inventory = await this.findOne(id);
+    if (inventory.status === InventoryStatus.VALIDATED) {
+      throw new BadRequestException(
+        'Impossible de supprimer un inventaire validé — il a déjà ajusté le stock.',
+      );
+    }
+    await this.prisma.inventory.delete({ where: { id } });
+    return { message: 'Inventaire supprimé', id };
   }
 }

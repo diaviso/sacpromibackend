@@ -1,6 +1,7 @@
 import {
   Body,
   Controller,
+  Delete,
   Get,
   Param,
   ParseUUIDPipe,
@@ -13,7 +14,7 @@ import { InventoryType, UserRole } from '@prisma/client';
 import { IsEnum, IsOptional } from 'class-validator';
 import { InventoryService } from './inventory.service';
 import { CreateRawInventoryDto } from './dto/create-inventory.dto';
-import { UpdateInventoryDto } from './dto/update-inventory.dto';
+import { CancelInventoryDto, UpdateInventoryDto } from './dto/update-inventory.dto';
 import { PaginationDto } from '../common/dto/pagination.dto';
 import { Roles } from '../common/decorators/roles.decorator';
 import { CurrentUser, AuthenticatedUser } from '../common/decorators/current-user.decorator';
@@ -92,5 +93,27 @@ export class InventoryController {
     @CurrentUser() user: AuthenticatedUser,
   ) {
     return this.service.validate(id, user.id);
+  }
+
+  @Patch(':id/cancel')
+  @Roles(UserRole.DIRECTOR, UserRole.PRODUCTION_MANAGER)
+  @ApiOperation({
+    summary: "Annuler un inventaire non validé (motif obligatoire, conservation pour audit)",
+  })
+  cancel(
+    @Param('id', new ParseUUIDPipe()) id: string,
+    @Body() dto: CancelInventoryDto,
+    @CurrentUser() user: AuthenticatedUser,
+  ) {
+    return this.service.cancel(id, dto.reason, user.id);
+  }
+
+  @Delete(':id')
+  @Roles(UserRole.DIRECTOR)
+  @ApiOperation({
+    summary: "Supprimer définitivement un inventaire non validé (DIRECTOR uniquement)",
+  })
+  remove(@Param('id', new ParseUUIDPipe()) id: string) {
+    return this.service.remove(id);
   }
 }

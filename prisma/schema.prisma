@@ -104,6 +104,7 @@ enum InventoryType {
 enum InventoryStatus {
   IN_PROGRESS
   VALIDATED
+  CANCELLED
 }
 
 enum StockReferenceType {
@@ -670,6 +671,8 @@ model Inventory {
   inventoryDate DateTime
   status        InventoryStatus @default(IN_PROGRESS)
   note          String?         @db.Text
+  /// Motif d'annulation — null tant que l'inventaire n'est pas annulé.
+  cancelReason  String?         @db.Text
   createdById   String
   createdAt     DateTime        @default(now())
   updatedAt     DateTime        @updatedAt
@@ -692,6 +695,10 @@ model InventoryItem {
   actualStock       Decimal? @db.Decimal(14, 4)
   variance          Decimal? @db.Decimal(14, 4)
   variancePercent   Decimal? @db.Decimal(8, 2)
+  /// Motif libre saisi par l'utilisateur quand un écart existe (perte,
+  /// casse, vol, erreur de comptage…). Optionnel mais fortement encouragé
+  /// dès qu'`actualStock != theoreticalStock`.
+  varianceReason    String?  @db.Text
 
   inventory       Inventory        @relation(fields: [inventoryId], references: [id], onDelete: Cascade)
   rawMaterial     RawMaterial?     @relation(fields: [rawMaterialId], references: [id])
