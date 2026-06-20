@@ -237,6 +237,46 @@ export class PurchaseInvoicesService {
   }
 
   /**
+   * Met à jour les champs ADMIN d'une facture (n° fournisseur, dates, scan).
+   * Refuse si la facture est annulée. Ne touche pas aux lignes (les lots
+   * créés et le PMP sont déjà figés ; pour corriger les lignes il faut
+   * annuler la facture et en saisir une nouvelle).
+   */
+  async updateAdmin(
+    id: string,
+    dto: import('./dto/update-purchase-invoice.dto').UpdatePurchaseInvoiceDto,
+  ) {
+    const invoice = await this.prisma.purchaseInvoice.findUnique({ where: { id } });
+    if (!invoice) throw new NotFoundException(`Facture ${id} introuvable`);
+    if (invoice.deletedAt) {
+      throw new BadRequestException(
+        "Impossible de modifier une facture annulée",
+      );
+    }
+    const data: Record<string, unknown> = {};
+    if (dto.supplierInvoiceNumber !== undefined) {
+      data.supplierInvoiceNumber = dto.supplierInvoiceNumber;
+    }
+    if (dto.invoiceDate !== undefined) {
+      data.invoiceDate = new Date(dto.invoiceDate);
+    }
+    if (dto.receptionDate !== undefined) {
+      data.receptionDate = new Date(dto.receptionDate);
+    }
+    if (dto.scanUrl !== undefined) {
+      data.scanUrl = dto.scanUrl || null;
+    }
+    if (Object.keys(data).length === 0) {
+      return invoice;
+    }
+    return this.prisma.purchaseInvoice.update({
+      where: { id },
+      data,
+      include: { supplier: { select: { id: true, name: true } } },
+    });
+  }
+
+  /**
    * Annulation totale d'une facture d'achat (soft-delete).
    *
    * Effets :

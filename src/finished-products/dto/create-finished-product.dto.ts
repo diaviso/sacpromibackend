@@ -1,5 +1,5 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
-import { FinishedProductCategory, FinishedProductUnit } from '@prisma/client';
+import { FinishedProductCategory } from '@prisma/client';
 import {
   IsEnum,
   IsInt,
@@ -28,9 +28,15 @@ export class CreateFinishedProductDto {
   @IsEnum(FinishedProductCategory)
   category!: FinishedProductCategory;
 
-  @ApiProperty({ enum: FinishedProductUnit })
-  @IsEnum(FinishedProductUnit)
-  unit!: FinishedProductUnit;
+  @ApiProperty({
+    example: 'sac 50 kg',
+    description:
+      "Unité de mesure libre (kg, sac 25kg, carton, palette…). Les valeurs historiques de l'enum FinishedProductUnit (KG, BAG_50KG…) restent valides.",
+  })
+  @IsString()
+  @MinLength(1)
+  @MaxLength(20)
+  unit!: string;
 
   @ApiProperty({ example: 18000, description: 'Prix de vente gros (FCFA)' })
   @IsInt()

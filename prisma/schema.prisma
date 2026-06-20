@@ -740,7 +740,11 @@ model FinishedProduct {
   code           String                  @unique
   name           String
   category       FinishedProductCategory
-  unit           FinishedProductUnit
+  /// Unite de mesure libre (kg, sac 25kg, carton, palette...) — historique :
+  /// les enregistrements anterieurs utilisaient l'enum FinishedProductUnit
+  /// (KG, BAG_50KG, etc.), conserve par compatibilite. Plus de contrainte
+  /// d'enum cote DB pour autoriser les unites metier non-standard.
+  unit           String                  @db.VarChar(20)
   wholesalePrice Int                     @default(0)
   retailPrice    Int                     @default(0)
   averageCost    Int                     @default(0)

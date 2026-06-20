@@ -13,6 +13,7 @@ import { UserRole } from '@prisma/client';
 import { IsString, MaxLength, MinLength } from 'class-validator';
 import { PurchaseInvoicesService } from './purchase-invoices.service';
 import { CreatePurchaseInvoiceDto } from './dto/create-purchase-invoice.dto';
+import { UpdatePurchaseInvoiceDto } from './dto/update-purchase-invoice.dto';
 import { QueryPurchaseInvoicesDto } from './dto/query-purchase-invoices.dto';
 import { Roles } from '../common/decorators/roles.decorator';
 import { CurrentUser, AuthenticatedUser } from '../common/decorators/current-user.decorator';
@@ -57,6 +58,21 @@ export class PurchaseInvoicesController {
   @ApiOperation({ summary: "Détail d'une facture d'achat avec lignes et paiements" })
   findOne(@Param('id', new ParseUUIDPipe()) id: string) {
     return this.service.findOne(id);
+  }
+
+  @Patch(':id')
+  @Roles(UserRole.DIRECTOR, UserRole.PRODUCTION_MANAGER)
+  @ApiOperation({
+    summary: "Modifier les champs ADMIN d'une facture (n° fournisseur, dates, scan)",
+    description:
+      "Les lignes (quantités, prix, matières) ne sont PAS modifiables après création — les lots et le PMP sont déjà appliqués. " +
+      "Pour corriger les lignes, annulez la facture (DIRECTOR) et resaisissez-en une nouvelle.",
+  })
+  updateAdmin(
+    @Param('id', new ParseUUIDPipe()) id: string,
+    @Body() dto: UpdatePurchaseInvoiceDto,
+  ) {
+    return this.service.updateAdmin(id, dto);
   }
 
   @Patch(':id/cancel')
