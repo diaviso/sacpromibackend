@@ -178,8 +178,46 @@ export class ExpensesService {
     });
   }
 
+  /**
+   * Met à jour une dépense PENDING_CONFIRMATION uniquement. Une fois
+   * confirmée, la dépense a généré une écriture de tresorerie immuable
+   * et ne peut plus être modifiée (passer par DELETE + nouvelle saisie).
+   */
+  async update(
+    id: string,
+    dto: import('./dto/update-expense.dto').UpdateExpenseDto,
+  ) {
+    const expense = await this.findOne(id);
+    if (expense.status === ExpenseStatus.CONFIRMED) {
+      throw new BadRequestException(
+        'Impossible de modifier une dépense confirmée. Supprimez-la puis créez-en une nouvelle.',
+      );
+    }
+    const data: Record<string, unknown> = {};
+    if (dto.amount !== undefined) data.amount = dto.amount;
+    if (dto.categoryId !== undefined) data.categoryId = dto.categoryId;
+    if (dto.activity !== undefined) data.activity = dto.activity;
+    if (dto.expenseDate !== undefined) data.expenseDate = new Date(dto.expenseDate);
+    if (dto.description !== undefined) data.description = dto.description;
+    if (dto.beneficiary !== undefined) data.beneficiary = dto.beneficiary;
+    if (dto.receiptUrl !== undefined) data.receiptUrl = dto.receiptUrl;
+    if (Object.keys(data).length === 0) return expense;
+    return this.prisma.expense.update({
+      where: { id },
+      data,
+      include: {
+        category: { select: { id: true, name: true } },
+      },
+    });
+  }
+
   async remove(id: string) {
-    await this.findOne(id);
+    const expense = await this.findOne(id);
+    if (expense.status === ExpenseStatus.CONFIRMED) {
+      throw new BadRequestException(
+        "Impossible de supprimer une dépense confirmée (écriture de trésorerie liée). Créez une dépense corrective si nécessaire.",
+      );
+    }
     await this.prisma.expense.delete({ where: { id } });
     return { message: 'Dépense supprimée' };
   }
