@@ -141,6 +141,30 @@ export class CapitalMovementsService {
     return movement;
   }
 
+  /**
+   * Modifie les champs cosmétiques d'un mouvement de capital sans toucher
+   * au montant ni au compte (qui ont déjà créé une écriture de trésorerie).
+   * Pour corriger un montant, créer un mouvement compensateur.
+   */
+  async update(
+    id: string,
+    dto: { contributorName?: string; description?: string; documentUrl?: string },
+  ) {
+    await this.findOne(id);
+    const data: Record<string, string | null> = {};
+    if (dto.contributorName !== undefined) data.contributorName = dto.contributorName;
+    if (dto.description !== undefined) data.description = dto.description;
+    if (dto.documentUrl !== undefined) data.documentUrl = dto.documentUrl;
+    return this.prisma.capitalMovement.update({
+      where: { id },
+      data,
+      include: {
+        account: true,
+        createdBy: { select: { id: true, fullName: true } },
+      },
+    });
+  }
+
   // ----- helpers -----
 
   private async nextReference(tx: Prisma.TransactionClient, type: CapitalMovementType) {

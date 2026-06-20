@@ -3,6 +3,8 @@ import {
   Controller,
   Get,
   Param,
+  ParseUUIDPipe,
+  Patch,
   Post,
   Query,
 } from '@nestjs/common';
@@ -53,6 +55,32 @@ class CreateCapitalMovementDto {
   @IsUUID()
   accountId!: string;
 
+  @ApiPropertyOptional({ example: 'Ibrahima Sow' })
+  @IsOptional()
+  @IsString()
+  @MaxLength(150)
+  contributorName?: string;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  @MaxLength(1000)
+  description?: string;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  documentUrl?: string;
+}
+
+/**
+ * Mise à jour cosmétique d'un mouvement de capital : contributeur,
+ * description, document. Le montant et le compte impacté ne sont PAS
+ * modifiables car ils ont créé une écriture de trésorerie immuable —
+ * pour corriger une erreur de montant, créer un mouvement compensateur
+ * (CONTRIBUTION pour rajouter, WITHDRAWAL pour réduire).
+ */
+class UpdateCapitalMovementDto {
   @ApiPropertyOptional({ example: 'Ibrahima Sow' })
   @IsOptional()
   @IsString()
@@ -145,5 +173,17 @@ export class CapitalMovementsController {
   @Get(':id')
   findOne(@Param('id') id: string) {
     return this.service.findOne(id);
+  }
+
+  @Patch(':id')
+  @ApiOperation({
+    summary:
+      "Modifier les champs cosmétiques d'un mouvement (contributeur, description, document). Le montant et le compte impacté ne sont pas modifiables — créez un mouvement compensateur si nécessaire.",
+  })
+  update(
+    @Param('id', new ParseUUIDPipe()) id: string,
+    @Body() dto: UpdateCapitalMovementDto,
+  ) {
+    return this.service.update(id, dto);
   }
 }

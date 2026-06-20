@@ -181,6 +181,30 @@ export class FixedAssetsService {
     };
   }
 
+  /**
+   * Modifie les champs cosmétiques d'une immobilisation sans toucher
+   * au plan d'amortissement (coût, durée, méthode déjà appliqués).
+   * Refuse si l'immobilisation n'est plus en service.
+   */
+  async update(
+    id: string,
+    dto: { name?: string; serialNumber?: string; location?: string; note?: string },
+  ) {
+    const asset = await this.prisma.fixedAsset.findUnique({ where: { id } });
+    if (!asset) throw new NotFoundException('Immobilisation introuvable');
+    if (asset.status !== 'IN_SERVICE') {
+      throw new BadRequestException(
+        `Modification impossible : immobilisation en statut ${asset.status}`,
+      );
+    }
+    const data: Record<string, string | null> = {};
+    if (dto.name !== undefined) data.name = dto.name;
+    if (dto.serialNumber !== undefined) data.serialNumber = dto.serialNumber;
+    if (dto.location !== undefined) data.location = dto.location;
+    if (dto.note !== undefined) data.note = dto.note;
+    return this.prisma.fixedAsset.update({ where: { id }, data });
+  }
+
   async dispose(id: string, dto: DisposeFixedAssetInput, userId: string) {
     return this.prisma.$transaction(async (tx) => {
       const asset = await tx.fixedAsset.findUnique({

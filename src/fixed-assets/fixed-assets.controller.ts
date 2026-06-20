@@ -3,6 +3,7 @@ import {
   Controller,
   Get,
   Param,
+  ParseUUIDPipe,
   Patch,
   Post,
   Query,
@@ -105,6 +106,38 @@ class CreateFixedAssetDto {
   @Type(() => Boolean)
   @IsBoolean()
   recordPurchaseAsTreasury?: boolean;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  @MaxLength(100)
+  serialNumber?: string;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  @MaxLength(200)
+  location?: string;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  @MaxLength(1000)
+  note?: string;
+}
+
+/**
+ * Mise à jour cosmétique d'une immobilisation : nom, n° série,
+ * emplacement, note. Le coût d'acquisition, la date, la durée
+ * d'utilité et la méthode d'amortissement ne sont PAS modifiables
+ * car ils ont déterminé le plan d'amortissement déjà appliqué.
+ */
+class UpdateFixedAssetDto {
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  @Length(2, 200)
+  name?: string;
 
   @ApiPropertyOptional()
   @IsOptional()
@@ -228,6 +261,18 @@ export class FixedAssetsController {
   @ApiOperation({ summary: 'Détail immobilisation + historique amortissements' })
   findOne(@Param('id') id: string) {
     return this.service.findOne(id);
+  }
+
+  @Patch(':id')
+  @ApiOperation({
+    summary:
+      "Modifier les champs cosmétiques d'une immobilisation (nom, série, emplacement, note). Coût, dates et méthode d'amortissement non modifiables.",
+  })
+  update(
+    @Param('id', new ParseUUIDPipe()) id: string,
+    @Body() dto: UpdateFixedAssetDto,
+  ) {
+    return this.service.update(id, dto);
   }
 
   @Patch(':id/dispose')

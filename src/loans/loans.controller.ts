@@ -3,6 +3,8 @@ import {
   Controller,
   Get,
   Param,
+  ParseUUIDPipe,
+  Patch,
   Post,
   Query,
 } from '@nestjs/common';
@@ -87,6 +89,31 @@ class CreateLoanDto {
   @IsOptional()
   @IsUUID()
   disbursementAccountId?: string;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  contractScanUrl?: string;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  @MaxLength(1000)
+  note?: string;
+}
+
+/**
+ * Mise à jour cosmétique d'un prêt : nom du prêteur, scan du contrat,
+ * note. Le capital, le taux, la durée, les dates ne sont PAS
+ * modifiables car ils ont déterminé l'échéancier déjà appliqué et
+ * potentiellement des paiements enregistrés.
+ */
+class UpdateLoanDto {
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  @Length(2, 100)
+  lenderName?: string;
 
   @ApiPropertyOptional()
   @IsOptional()
@@ -216,6 +243,19 @@ export class LoansController {
   @ApiOperation({ summary: 'Détail prêt + échéancier complet + paiements' })
   findOne(@Param('id') id: string) {
     return this.service.findOne(id);
+  }
+
+  @Patch(':id')
+  @Roles(UserRole.DIRECTOR)
+  @ApiOperation({
+    summary:
+      'Modifier les champs cosmétiques (prêteur, contrat, note). Capital, taux, durée et dates non modifiables.',
+  })
+  update(
+    @Param('id', new ParseUUIDPipe()) id: string,
+    @Body() dto: UpdateLoanDto,
+  ) {
+    return this.service.update(id, dto);
   }
 
   @Post('payments')

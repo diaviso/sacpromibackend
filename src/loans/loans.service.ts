@@ -178,6 +178,26 @@ export class LoansService {
     return loan;
   }
 
+  /**
+   * Modifie les champs cosmétiques d'un prêt — l'échéancier (capital,
+   * taux, durée) n'est pas modifiable. Seul le prêteur, le scan du
+   * contrat et la note peuvent l'être.
+   */
+  async update(
+    id: string,
+    dto: { lenderName?: string; contractScanUrl?: string; note?: string },
+  ) {
+    await this.findOne(id);
+    const data: Record<string, string | null> = {};
+    if (dto.lenderName !== undefined) data.lenderName = dto.lenderName;
+    if (dto.contractScanUrl !== undefined) data.contractScanUrl = dto.contractScanUrl;
+    if (dto.note !== undefined) data.note = dto.note;
+    return this.prisma.loan.update({
+      where: { id },
+      data,
+    });
+  }
+
   async addPayment(dto: CreateLoanPaymentInput, userId: string) {
     return this.prisma.$transaction(async (tx) => {
       const loan = await tx.loan.findUnique({
