@@ -96,6 +96,18 @@ export class CustomerOrdersController {
     return this.service.confirm(id);
   }
 
+  @Patch(':id')
+  @ApiOperation({
+    summary: 'Modifier une commande PENDING (lignes, dates, client). Refusé au-delà.',
+  })
+  update(
+    @Param('id', new ParseUUIDPipe()) id: string,
+    @Body() dto: import('./dto/update-customer-order.dto').UpdateCustomerOrderDto,
+    @CurrentUser() user: AuthenticatedUser,
+  ) {
+    return this.service.update(id, dto, user.id);
+  }
+
   @Patch(':id/cancel')
   @ApiOperation({ summary: 'Annuler la commande (motif obligatoire)' })
   cancel(@Param('id', new ParseUUIDPipe()) id: string, @Body() dto: CancelOrderDto) {

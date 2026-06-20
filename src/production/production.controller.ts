@@ -56,6 +56,17 @@ export class ProductionController {
     return this.service.start(id);
   }
 
+  @Patch(':id')
+  @ApiOperation({
+    summary: 'Modifier un ordre de production PLANNED (formule, quantité, dates, note)',
+  })
+  update(
+    @Param('id', new ParseUUIDPipe()) id: string,
+    @Body() dto: import('./dto/update-production-order.dto').UpdateProductionOrderDto,
+  ) {
+    return this.service.update(id, dto);
+  }
+
   @Patch(':id/complete')
   @ApiOperation({
     summary: 'Clôturer la production',

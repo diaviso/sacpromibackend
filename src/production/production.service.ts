@@ -149,6 +149,35 @@ export class ProductionService {
     return order;
   }
 
+  /**
+   * Modifie un ordre de production PLANNED (formule, quantité cible,
+   * dates, note). Refuse au-delà car les matières ont été consommées.
+   */
+  async update(
+    id: string,
+    dto: import('./dto/update-production-order.dto').UpdateProductionOrderDto,
+  ) {
+    const order = await this.findOne(id);
+    if (order.status !== ProductionOrderStatus.PLANNED) {
+      throw new BadRequestException(
+        `Seuls les ordres PLANNED peuvent être modifiés (actuel : ${order.status}).`,
+      );
+    }
+    return this.prisma.productionOrder.update({
+      where: { id },
+      data: {
+        formulaId: dto.formulaId ?? undefined,
+        targetQuantity: dto.targetQuantity ?? undefined,
+        productionDate: dto.productionDate ? new Date(dto.productionDate) : undefined,
+        expirationDate: dto.expirationDate
+          ? new Date(dto.expirationDate)
+          : undefined,
+        note: dto.note ?? undefined,
+      },
+      include: { formula: { select: { id: true, name: true } } },
+    });
+  }
+
   async start(id: string) {
     const order = await this.findOne(id);
     if (order.status !== ProductionOrderStatus.PLANNED) {

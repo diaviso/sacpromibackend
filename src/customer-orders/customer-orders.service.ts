@@ -155,6 +155,56 @@ export class CustomerOrdersService {
     });
   }
 
+  /**
+   * Met à jour une commande PENDING. Les lignes peuvent être remplacées,
+   * les dates et le client modifiés. Refuse dès qu'une livraison existe
+   * (PARTIALLY_DELIVERED, DELIVERED, etc.) — annuler et recréer dans ce cas.
+   */
+  async update(
+    id: string,
+    dto: import('./dto/update-customer-order.dto').UpdateCustomerOrderDto,
+    _userId: string,
+  ) {
+    const order = await this.findOne(id);
+    if (order.status !== CustomerOrderStatus.PENDING) {
+      throw new BadRequestException(
+        `Seules les commandes PENDING peuvent être modifiées (actuel : ${order.status}).`,
+      );
+    }
+    return this.prisma.$transaction(async (tx) => {
+      if (dto.items) {
+        await tx.customerOrderItem.deleteMany({ where: { customerOrderId: id } });
+      }
+      const totalAmount = dto.items
+        ? dto.items.reduce(
+            (sum, it) => sum + Math.round(it.quantityOrdered * (it.unitPrice ?? 0)),
+            0,
+          )
+        : undefined;
+      return tx.customerOrder.update({
+        where: { id },
+        data: {
+          customerId: dto.customerId ?? undefined,
+          orderDate: dto.orderDate ? new Date(dto.orderDate) : undefined,
+          expectedDate: dto.expectedDate ? new Date(dto.expectedDate) : undefined,
+          totalAmount,
+          items: dto.items
+            ? {
+                create: dto.items.map((it) => ({
+                  finishedProductId: it.finishedProductId,
+                  quantityOrdered: it.quantityOrdered,
+                  quantityDelivered: 0,
+                  unitPrice: it.unitPrice ?? 0,
+                  lineAmount: Math.round(it.quantityOrdered * (it.unitPrice ?? 0)),
+                })),
+              }
+            : undefined,
+        },
+        include: { items: true },
+      });
+    });
+  }
+
   async cancel(id: string, reason: string) {
     const order = await this.findOne(id);
     if (
