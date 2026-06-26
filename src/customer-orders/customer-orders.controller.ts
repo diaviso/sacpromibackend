@@ -8,8 +8,8 @@ import {
   Post,
   Query,
 } from '@nestjs/common';
-import { ApiBearerAuth, ApiOperation, ApiPropertyOptional, ApiTags } from '@nestjs/swagger';
-import { CustomerOrderStatus, UserRole } from '@prisma/client';
+import { ApiBearerAuth, ApiOperation, ApiProperty, ApiPropertyOptional, ApiTags } from '@nestjs/swagger';
+import { CustomerOrderPriority, CustomerOrderStatus, UserRole } from '@prisma/client';
 import { IsDateString, IsEnum, IsIn, IsOptional, IsString, IsUUID, MaxLength, MinLength } from 'class-validator';
 import { CustomerOrdersService } from './customer-orders.service';
 import { CreateCustomerOrderDto } from './dto/create-customer-order.dto';
@@ -17,7 +17,7 @@ import { PaginationDto } from '../common/dto/pagination.dto';
 import { Roles } from '../common/decorators/roles.decorator';
 import { CurrentUser, AuthenticatedUser } from '../common/decorators/current-user.decorator';
 
-const CUSTOMER_ORDER_SORT_FIELDS = ['orderDate', 'reference', 'totalAmount', 'status'] as const;
+const CUSTOMER_ORDER_SORT_FIELDS = ['orderDate', 'reference', 'totalAmount', 'status', 'priority'] as const;
 type CustomerOrderSortField = (typeof CUSTOMER_ORDER_SORT_FIELDS)[number];
 
 class QueryCustomerOrdersDto extends PaginationDto {
@@ -30,6 +30,16 @@ class QueryCustomerOrdersDto extends PaginationDto {
   @IsOptional()
   @IsUUID()
   customerId?: string;
+
+  @ApiPropertyOptional({ description: 'Filtrer par responsable assigné' })
+  @IsOptional()
+  @IsUUID()
+  assignedToId?: string;
+
+  @ApiPropertyOptional({ enum: CustomerOrderPriority })
+  @IsOptional()
+  @IsEnum(CustomerOrderPriority)
+  priority?: CustomerOrderPriority;
 
   @ApiPropertyOptional()
   @IsOptional()
@@ -63,6 +73,38 @@ class CancelOrderDto {
   @MinLength(3)
   @MaxLength(500)
   reason!: string;
+}
+
+class ChangeStatusDto {
+  @ApiProperty({ enum: CustomerOrderStatus })
+  @IsEnum(CustomerOrderStatus)
+  status!: CustomerOrderStatus;
+
+  @ApiPropertyOptional({ description: "Motif (obligatoire si CANCELLED)" })
+  @IsOptional()
+  @IsString()
+  @MaxLength(500)
+  reason?: string;
+}
+
+class AssignOrderDto {
+  @ApiPropertyOptional({ description: 'ID de l\'utilisateur — null pour désassigner' })
+  @IsOptional()
+  @IsUUID()
+  assignedToId?: string | null;
+}
+
+class SetPriorityDto {
+  @ApiProperty({ enum: CustomerOrderPriority })
+  @IsEnum(CustomerOrderPriority)
+  priority!: CustomerOrderPriority;
+}
+
+class SetInternalNoteDto {
+  @ApiProperty({ description: 'Note interne (chaîne vide pour effacer)' })
+  @IsString()
+  @MaxLength(2000)
+  internalNote!: string;
 }
 
 @ApiTags('Customer Orders')
@@ -112,5 +154,50 @@ export class CustomerOrdersController {
   @ApiOperation({ summary: 'Annuler la commande (motif obligatoire)' })
   cancel(@Param('id', new ParseUUIDPipe()) id: string, @Body() dto: CancelOrderDto) {
     return this.service.cancel(id, dto.reason);
+  }
+
+  @Patch(':id/status')
+  @ApiOperation({
+    summary:
+      'Changer le statut de la commande (drag & drop Kanban). Valide la transition selon la state machine.',
+  })
+  changeStatus(
+    @Param('id', new ParseUUIDPipe()) id: string,
+    @Body() dto: ChangeStatusDto,
+  ) {
+    return this.service.changeStatus(id, dto.status, dto.reason);
+  }
+
+  @Patch(':id/assign')
+  @ApiOperation({
+    summary:
+      'Assigner un responsable a la commande (ou desassigner avec null)',
+  })
+  assign(
+    @Param('id', new ParseUUIDPipe()) id: string,
+    @Body() dto: AssignOrderDto,
+  ) {
+    return this.service.assign(id, dto.assignedToId ?? null);
+  }
+
+  @Patch(':id/priority')
+  @ApiOperation({ summary: 'Changer la priorite (LOW/NORMAL/HIGH/URGENT)' })
+  setPriority(
+    @Param('id', new ParseUUIDPipe()) id: string,
+    @Body() dto: SetPriorityDto,
+  ) {
+    return this.service.setPriority(id, dto.priority);
+  }
+
+  @Patch(':id/internal-note')
+  @ApiOperation({ summary: 'Definir / effacer la note interne' })
+  setInternalNote(
+    @Param('id', new ParseUUIDPipe()) id: string,
+    @Body() dto: SetInternalNoteDto,
+  ) {
+    return this.service.setInternalNote(
+      id,
+      dto.internalNote.trim().length === 0 ? null : dto.internalNote.trim(),
+    );
   }
 }

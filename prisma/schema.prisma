@@ -171,9 +171,20 @@ enum CustomerPriceCategory {
   RETAIL
 }
 
+// Etats d'une commande client.
+//
+// Cycle normal :
+//   PENDING (initiee) -> CONFIRMED (validee, blocage stock) ->
+//   IN_PREPARATION (atelier) -> READY_TO_DELIVER (lot prepare) ->
+//   PARTIALLY_DELIVERED (livraison partielle, factures emises) ->
+//   DELIVERED (entierement livree) -> CLOSED (cloturee comptablement)
+//
+// Sortie hors cycle : CANCELLED (annulee a tout moment avant livraison)
 enum CustomerOrderStatus {
   PENDING
   CONFIRMED
+  IN_PREPARATION
+  READY_TO_DELIVER
   PARTIALLY_DELIVERED
   DELIVERED
   CLOSED
@@ -297,6 +308,7 @@ model User {
   breedingBatchesCreated      BreedingBatch[]
   breedingRecordsCreated      BreedingRecord[]
   customerOrdersCreated       CustomerOrder[]
+  customerOrdersAssigned      CustomerOrder[]       @relation("CustomerOrderAssignedTo")
   saleInvoicesCreated         SaleInvoice[]
   customerPaymentsCreated     CustomerPayment[]
   expensesCreated             Expense[]
@@ -1112,6 +1124,18 @@ model Customer {
   @@map("customers")
 }
 
+// Niveau de priorité d'une commande client — affichage Kanban / liste
+enum CustomerOrderPriority {
+  LOW
+  NORMAL
+  HIGH
+  URGENT
+}
+
+// Etat de preparation d'une commande dans le flux Kanban operationnel.
+// IN_PREPARATION : la commande est en cours de preparation (picking, conditionnement)
+// READY_TO_DELIVER : la commande est prete a etre livree au client
+// Ces deux statuts intercalent entre CONFIRMED et PARTIALLY_DELIVERED.
 model CustomerOrder {
   id           String              @id @default(uuid())
   reference    String              @unique
@@ -1119,20 +1143,30 @@ model CustomerOrder {
   orderDate    DateTime
   expectedDate DateTime?
   status       CustomerOrderStatus @default(PENDING)
+  /// Priorité affichée dans le Kanban (drapeau + couleur). Défaut: NORMAL.
+  priority     CustomerOrderPriority @default(NORMAL)
+  /// ID de l'utilisateur en charge du suivi (responsable commercial).
+  /// Optionnel — peut être assigné après création.
+  assignedToId String?
   totalAmount  Int                 @default(0)
   note         String?             @db.Text
+  /// Note interne pour l'équipe (visible seulement par les rôles autorisés).
+  internalNote String?             @db.Text
   cancelReason String?             @db.Text
   createdById  String
   createdAt    DateTime            @default(now())
   updatedAt    DateTime            @updatedAt
 
-  customer  Customer            @relation(fields: [customerId], references: [id])
-  createdBy User                @relation(fields: [createdById], references: [id])
-  items     CustomerOrderItem[]
-  invoices  SaleInvoice[]
+  customer   Customer            @relation(fields: [customerId], references: [id])
+  createdBy  User                @relation(fields: [createdById], references: [id])
+  assignedTo User?               @relation("CustomerOrderAssignedTo", fields: [assignedToId], references: [id])
+  items      CustomerOrderItem[]
+  invoices   SaleInvoice[]
 
   @@index([customerId])
   @@index([status])
+  @@index([assignedToId])
+  @@index([priority])
   @@index([orderDate])
   @@index([reference])
   @@map("customer_orders")

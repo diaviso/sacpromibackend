@@ -75,16 +75,20 @@ export class CustomerOrdersService {
     filters: {
       status?: CustomerOrderStatus;
       customerId?: string;
+      assignedToId?: string;
+      priority?: import('@prisma/client').CustomerOrderPriority;
       search?: string;
       from?: string;
       to?: string;
-      sortBy?: 'orderDate' | 'reference' | 'totalAmount' | 'status';
+      sortBy?: 'orderDate' | 'reference' | 'totalAmount' | 'status' | 'priority';
       sortOrder?: 'asc' | 'desc';
     },
   ) {
     const where: Prisma.CustomerOrderWhereInput = {};
     if (filters.status) where.status = filters.status;
     if (filters.customerId) where.customerId = filters.customerId;
+    if (filters.assignedToId) where.assignedToId = filters.assignedToId;
+    if (filters.priority) where.priority = filters.priority;
     if (filters.from || filters.to) {
       where.orderDate = {};
       if (filters.from) where.orderDate.gte = new Date(filters.from);
@@ -95,6 +99,7 @@ export class CustomerOrdersService {
       where.OR = [
         { reference: { contains: term, mode: 'insensitive' } },
         { note: { contains: term, mode: 'insensitive' } },
+        { internalNote: { contains: term, mode: 'insensitive' } },
         { customer: { name: { contains: term, mode: 'insensitive' } } },
       ];
     }
@@ -110,8 +115,9 @@ export class CustomerOrdersService {
         take: query.take,
         orderBy,
         include: {
-          customer: { select: { id: true, name: true } },
-          _count: { select: { items: true } },
+          customer: { select: { id: true, name: true, priceCategory: true } },
+          assignedTo: { select: { id: true, fullName: true, email: true } },
+          _count: { select: { items: true, invoices: true } },
         },
       }),
       this.prisma.customerOrder.count({ where }),
@@ -131,9 +137,20 @@ export class CustomerOrdersService {
           },
         },
         invoices: {
-          select: { id: true, reference: true, totalAmount: true, paymentStatus: true, type: true },
+          select: {
+            id: true,
+            reference: true,
+            totalAmount: true,
+            amountPaid: true,
+            amountRemaining: true,
+            paymentStatus: true,
+            type: true,
+            invoiceDate: true,
+          },
+          orderBy: { invoiceDate: 'desc' },
         },
         createdBy: { select: { id: true, fullName: true } },
+        assignedTo: { select: { id: true, fullName: true, email: true, role: true } },
       },
     });
     if (!order) {
@@ -219,6 +236,154 @@ export class CustomerOrdersService {
     return this.prisma.customerOrder.update({
       where: { id },
       data: { status: CustomerOrderStatus.CANCELLED, cancelReason: reason },
+    });
+  }
+
+  /**
+   * Transitions valides du cycle de vie d'une commande.
+   *
+   * Le flux Kanban normal est :
+   *   PENDING -> CONFIRMED -> IN_PREPARATION -> READY_TO_DELIVER ->
+   *   PARTIALLY_DELIVERED -> DELIVERED -> CLOSED
+   *
+   * Règles :
+   * - PENDING ne peut aller que vers CONFIRMED ou CANCELLED
+   * - CONFIRMED, IN_PREPARATION, READY_TO_DELIVER peuvent revenir en arrière
+   *   ou avancer d'un cran (mais pas sauter par-dessus PARTIALLY_DELIVERED)
+   * - PARTIALLY_DELIVERED -> DELIVERED -> CLOSED unidirectionnel
+   *   (la livraison crée des SaleInvoice qui ne se défont pas en un clic)
+   * - CANCELLED, CLOSED sont terminaux (sauf cancel->pending = "réactivation")
+   * - On peut annuler à tout moment avant livraison
+   *
+   * Les changements automatiques de statut suite à émission de facture
+   * (PARTIALLY_DELIVERED / DELIVERED) sont gérés par updateDeliveryFromSale().
+   * Cette méthode ne sert qu'aux transitions manuelles via Kanban / boutons.
+   */
+  private static readonly STATUS_TRANSITIONS: Record<
+    CustomerOrderStatus,
+    CustomerOrderStatus[]
+  > = {
+    [CustomerOrderStatus.PENDING]: [
+      CustomerOrderStatus.CONFIRMED,
+      CustomerOrderStatus.CANCELLED,
+    ],
+    [CustomerOrderStatus.CONFIRMED]: [
+      CustomerOrderStatus.PENDING,
+      CustomerOrderStatus.IN_PREPARATION,
+      CustomerOrderStatus.CANCELLED,
+    ],
+    [CustomerOrderStatus.IN_PREPARATION]: [
+      CustomerOrderStatus.CONFIRMED,
+      CustomerOrderStatus.READY_TO_DELIVER,
+      CustomerOrderStatus.CANCELLED,
+    ],
+    [CustomerOrderStatus.READY_TO_DELIVER]: [
+      CustomerOrderStatus.IN_PREPARATION,
+      CustomerOrderStatus.CANCELLED,
+      // Pas de transition manuelle vers PARTIALLY_DELIVERED : c'est l'émission
+      // d'une SaleInvoice qui déclenche ce passage automatique.
+    ],
+    [CustomerOrderStatus.PARTIALLY_DELIVERED]: [
+      CustomerOrderStatus.CLOSED,
+    ],
+    [CustomerOrderStatus.DELIVERED]: [CustomerOrderStatus.CLOSED],
+    [CustomerOrderStatus.CLOSED]: [],
+    [CustomerOrderStatus.CANCELLED]: [CustomerOrderStatus.PENDING], // ré-ouverture
+  };
+
+  /**
+   * Change le statut d'une commande après validation de la transition.
+   * Pattern drag & drop Kanban : le frontend envoie le nouvel état désiré,
+   * le backend vérifie qu'il est atteignable depuis l'état courant.
+   */
+  async changeStatus(
+    id: string,
+    newStatus: CustomerOrderStatus,
+    reason?: string,
+  ) {
+    const order = await this.findOne(id);
+    if (order.status === newStatus) return order; // idempotent
+    const allowed = CustomerOrdersService.STATUS_TRANSITIONS[order.status] ?? [];
+    if (!allowed.includes(newStatus)) {
+      throw new BadRequestException(
+        `Transition refusée : ${order.status} -> ${newStatus}. Transitions possibles : ${
+          allowed.join(', ') || 'aucune'
+        }.`,
+      );
+    }
+    const data: { status: CustomerOrderStatus; cancelReason?: string | null } = {
+      status: newStatus,
+    };
+    if (newStatus === CustomerOrderStatus.CANCELLED) {
+      if (!reason || reason.trim().length < 3) {
+        throw new BadRequestException(
+          "Motif d'annulation obligatoire (minimum 3 caractères)",
+        );
+      }
+      data.cancelReason = reason.trim();
+    }
+    if (
+      order.status === CustomerOrderStatus.CANCELLED &&
+      newStatus === CustomerOrderStatus.PENDING
+    ) {
+      // Ré-ouverture : on efface le motif
+      data.cancelReason = null;
+    }
+    return this.prisma.customerOrder.update({
+      where: { id },
+      data,
+      include: {
+        customer: { select: { id: true, name: true } },
+        assignedTo: { select: { id: true, fullName: true } },
+      },
+    });
+  }
+
+  /**
+   * Assigne (ou desassigne avec null) un responsable a la commande.
+   */
+  async assign(id: string, assignedToId: string | null) {
+    await this.findOne(id);
+    if (assignedToId) {
+      const user = await this.prisma.user.findUnique({
+        where: { id: assignedToId },
+        select: { id: true, isActive: true },
+      });
+      if (!user || !user.isActive) {
+        throw new BadRequestException('Utilisateur introuvable ou inactif');
+      }
+    }
+    return this.prisma.customerOrder.update({
+      where: { id },
+      data: { assignedToId },
+      include: {
+        assignedTo: { select: { id: true, fullName: true } },
+      },
+    });
+  }
+
+  /**
+   * Change le niveau de priorité (LOW/NORMAL/HIGH/URGENT).
+   */
+  async setPriority(
+    id: string,
+    priority: import('@prisma/client').CustomerOrderPriority,
+  ) {
+    await this.findOne(id);
+    return this.prisma.customerOrder.update({
+      where: { id },
+      data: { priority },
+    });
+  }
+
+  /**
+   * Met à jour la note interne (visible par l'équipe commerciale).
+   */
+  async setInternalNote(id: string, internalNote: string | null) {
+    await this.findOne(id);
+    return this.prisma.customerOrder.update({
+      where: { id },
+      data: { internalNote },
     });
   }
 
