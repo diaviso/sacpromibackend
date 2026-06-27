@@ -403,6 +403,7 @@ enum UploadCategory {
   FIXED_ASSET_DOCUMENT // facture / photo d'immobilisation
   LOAN_CONTRACT // contrat de prêt
   CAPITAL_DOCUMENT // preuve d'apport / décharge
+  PRODUCT_IMAGE // image illustrative d'un produit fini
   GENERIC // autre
 }
 
@@ -751,6 +752,10 @@ model FinishedProduct {
   id             String                  @id @default(uuid())
   code           String                  @unique
   name           String
+  /// Image illustrative du produit (FK -> Upload categorie PRODUCT_IMAGE).
+  /// Affichee dans le catalogue, la Caisse et les fiches detail. Optionnelle —
+  /// si null, on retombe sur un placeholder (initiales du code).
+  imageUploadId  String?
   category       FinishedProductCategory
   /// Unite de mesure libre (kg, sac 25kg, carton, palette...) — historique :
   /// les enregistrements anterieurs utilisaient l'enum FinishedProductUnit

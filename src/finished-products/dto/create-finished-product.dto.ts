@@ -6,6 +6,7 @@ import {
   IsNumber,
   IsOptional,
   IsString,
+  IsUUID,
   MaxLength,
   Min,
   MinLength,
@@ -53,4 +54,12 @@ export class CreateFinishedProductDto {
   @IsNumber({ maxDecimalPlaces: 4 })
   @Min(0)
   alertThreshold?: number;
+
+  @ApiPropertyOptional({
+    description:
+      "Image illustrative du produit (FK Upload). Affichee dans le catalogue et la Caisse.",
+  })
+  @IsOptional()
+  @IsUUID()
+  imageUploadId?: string;
 }
