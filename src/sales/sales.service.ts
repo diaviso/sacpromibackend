@@ -14,11 +14,13 @@ import {
   SaleInvoiceType,
   SalePaymentMethod,
   StockReferenceType,
+  TreasuryEntrySource,
 } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { SequenceService } from '../common/services/sequence.service';
 import { FinishedStockService } from '../finished-stock/finished-stock.service';
 import { CustomerOrdersService } from '../customer-orders/customer-orders.service';
+import { TreasuryService } from '../treasury/treasury.service';
 import { CreateSaleDto } from './dto/create-sale.dto';
 import { CreateCreditNoteDto } from './dto/create-credit-note.dto';
 import { paginate, PaginationDto } from '../common/dto/pagination.dto';
@@ -32,6 +34,7 @@ export class SalesService {
     private readonly sequence: SequenceService,
     private readonly finishedStockService: FinishedStockService,
     private readonly customerOrdersService: CustomerOrdersService,
+    private readonly treasury: TreasuryService,
   ) {}
 
   async create(dto: CreateSaleDto, userId: string, options?: { overrideCreditLimit?: boolean }) {
@@ -77,11 +80,58 @@ export class SalesService {
         lineAmount: Math.round(it.quantity * unitPrice),
       };
     });
-    const totalAmount = itemsResolved.reduce((s, it) => s + it.lineAmount, 0);
+    const subtotalAmount = itemsResolved.reduce((s, it) => s + it.lineAmount, 0);
 
-    // VALIDATION : plafond crédit — blocage strict, sauf override explicite par directeur
+    // ── Remise globale (mode CAISSE) ────────────────────────────────────────
+    // La remise doit etre >= 0 et ne peut pas depasser le sous-total
+    // (sinon le total devient negatif). On la persiste sur la facture pour
+    // que la comptabilite et la reedition du PDF restent fideles.
+    const discountAmount = Math.max(0, dto.discountAmount ?? 0);
+    if (discountAmount > subtotalAmount) {
+      throw new BadRequestException(
+        `Remise (${discountAmount.toLocaleString('fr-FR')} FCFA) superieure au sous-total ` +
+          `(${subtotalAmount.toLocaleString('fr-FR')} FCFA)`,
+      );
+    }
+    const totalAmount = subtotalAmount - discountAmount;
+
+    // ── Mode paiement embarque (POS) ───────────────────────────────────────
+    // Quand paidAmount est explicitement fourni, on encaisse dans la meme
+    // transaction. Sinon, comportement legacy : facture posee selon
+    // paymentMethod (CREDIT = impaye, autre = paye integralement).
+    const posMode = dto.paidAmount !== undefined;
+    if (posMode) {
+      // En POS, on encaisse via un moyen physique : refuser le mode CREDIT
+      // (qui veut dire "le client n'a rien paye"). Pour faire du credit pur
+      // depuis la caisse, l'utilisateur met paidAmount=0 — mais alors le
+      // paymentMethod doit etre CREDIT pour rester coherent.
+      if (dto.paidAmount! > 0 && dto.paymentMethod === SalePaymentMethod.CREDIT) {
+        throw new BadRequestException(
+          'Incoherent : montant encaisse > 0 mais methode de paiement = CREDIT. ' +
+            'Choisir une methode de paiement reelle (CASH, WAVE, TRANSFER...).',
+        );
+      }
+      if (dto.paidAmount! > 0 && !dto.paymentAccountId) {
+        throw new BadRequestException(
+          'Un compte de tresorerie est requis pour enregistrer un encaissement.',
+        );
+      }
+      // Limite haute : on ne sauvegarde jamais plus que le total (le rendu
+      // monnaie est gere a l'affichage, pas en base).
+      if (dto.paidAmount! > totalAmount) {
+        // On accepte mais on plafonne — le frontend a deja calcule le rendu.
+        // Note : aucun warning, c'est attendu pour un POS classique.
+      }
+    }
+
+    // VALIDATION : plafond crédit — blocage strict, sauf override explicite par directeur.
+    // Le plafond s'applique sur la creance reelle = total net - encaissement immediat.
     const warnings: string[] = [];
-    if (dto.paymentMethod === SalePaymentMethod.CREDIT && customer.creditLimit > 0) {
+    const immediatePaid = posMode ? Math.min(dto.paidAmount!, totalAmount) : 0;
+    const futureDebt = totalAmount - immediatePaid;
+    const isCredit = dto.paymentMethod === SalePaymentMethod.CREDIT;
+    const createsDebt = isCredit || (posMode && futureDebt > 0);
+    if (createsDebt && customer.creditLimit > 0) {
       const currentDebt = await this.prisma.saleInvoice.aggregate({
         where: {
           customerId: dto.customerId,
@@ -90,10 +140,11 @@ export class SalesService {
         _sum: { amountRemaining: true },
       });
       const currentBalance = currentDebt._sum.amountRemaining ?? 0;
-      if (currentBalance + totalAmount > customer.creditLimit) {
+      const addedDebt = posMode ? futureDebt : totalAmount;
+      if (currentBalance + addedDebt > customer.creditLimit) {
         const msg =
           `Plafond crédit dépassé : créances actuelles ${currentBalance.toLocaleString('fr-FR')} ` +
-          `+ cette vente ${totalAmount.toLocaleString('fr-FR')} > plafond ` +
+          `+ creance generee ${addedDebt.toLocaleString('fr-FR')} > plafond ` +
           `${customer.creditLimit.toLocaleString('fr-FR')} FCFA`;
         if (options?.overrideCreditLimit) {
           // Bypass autorisé (directeur) : on log et on continue avec warning
@@ -140,11 +191,27 @@ export class SalesService {
         }
       }
 
-      // Statut paiement initial
-      const isCredit = dto.paymentMethod === SalePaymentMethod.CREDIT;
-      const paymentStatus = isCredit ? PaymentStatus.UNPAID : PaymentStatus.PAID;
-      const amountPaid = isCredit ? 0 : totalAmount;
-      const amountRemaining = isCredit ? totalAmount : 0;
+      // ── Statut paiement initial ─────────────────────────────────────────
+      // Mode POS (paidAmount fourni) : on respecte exactement le montant
+      // encaisse, plafonne au total (le rendu monnaie est cote front).
+      // Mode legacy : binaire selon paymentMethod (CREDIT = impaye, sinon paye).
+      let amountPaid: number;
+      let amountRemaining: number;
+      let paymentStatus: PaymentStatus;
+      if (posMode) {
+        amountPaid = Math.min(dto.paidAmount!, totalAmount);
+        amountRemaining = totalAmount - amountPaid;
+        paymentStatus =
+          amountPaid >= totalAmount
+            ? PaymentStatus.PAID
+            : amountPaid > 0
+              ? PaymentStatus.PARTIALLY_PAID
+              : PaymentStatus.UNPAID;
+      } else {
+        amountPaid = isCredit ? 0 : totalAmount;
+        amountRemaining = isCredit ? totalAmount : 0;
+        paymentStatus = isCredit ? PaymentStatus.UNPAID : PaymentStatus.PAID;
+      }
 
       // Consommer le stock PF (FIFO) pour chaque ligne — récupère les lots utilisés
       const itemsWithLots: Array<typeof itemsResolved[0] & { lotId: string | null }> = [];
@@ -169,6 +236,9 @@ export class SalesService {
           customerId: dto.customerId,
           customerOrderId: dto.customerOrderId,
           invoiceDate,
+          subtotalAmount,
+          discountAmount,
+          discountReason: discountAmount > 0 ? (dto.discountReason ?? null) : null,
           totalAmount,
           paymentMethod: dto.paymentMethod,
           paymentStatus,
@@ -222,6 +292,49 @@ export class SalesService {
           dto.customerOrderId,
           itemsResolved.map((it) => ({ finishedProductId: it.finishedProductId, quantity: it.quantity })),
         );
+      }
+
+      // ── Encaissement embarque (mode CAISSE) ──────────────────────────────
+      // Si paidAmount > 0 a ete fourni, on cree un CustomerPayment dans la
+      // meme transaction. C'est l'equivalent d'un appel separe a
+      // POST /customer-payments mais atomique avec la facture.
+      // Le treasury entry est ecrit si paymentAccountId est fourni (et
+      // paymentMethod != CREDIT, garde-fou meme si deja valide plus haut).
+      if (posMode && amountPaid > 0) {
+        // Verification du compte (existe + actif)
+        const account = await tx.account.findUnique({
+          where: { id: dto.paymentAccountId! },
+        });
+        if (!account) throw new NotFoundException('Compte de tresorerie introuvable');
+        if (!account.isActive) throw new BadRequestException('Le compte de tresorerie est desactive');
+
+        const payment = await tx.customerPayment.create({
+          data: {
+            saleInvoiceId: invoice.id,
+            amount: amountPaid,
+            paymentDate: invoiceDate,
+            paymentMethod: dto.paymentMethod,
+            accountId: dto.paymentAccountId,
+            note: 'Encaissement comptant (caisse)',
+            createdById: userId,
+          },
+        });
+
+        // Ecriture tresorerie — credit du compte (montant positif).
+        // Source = CUSTOMER_PAYMENT pour que les rapports d'encaissements
+        // remontent bien cette vente comptant.
+        if (dto.paymentMethod !== SalePaymentMethod.CREDIT) {
+          await this.treasury.writeEntry({
+            tx,
+            accountId: dto.paymentAccountId!,
+            entryDate: invoiceDate,
+            amount: amountPaid,
+            source: TreasuryEntrySource.CUSTOMER_PAYMENT,
+            description: `Encaissement comptant ${reference} (${invoice.customer.name})`,
+            customerPaymentId: payment.id,
+            userId,
+          });
+        }
       }
 
       return { invoice, warnings };

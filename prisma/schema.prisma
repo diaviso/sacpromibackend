@@ -1196,6 +1196,16 @@ model SaleInvoice {
   customerId      String
   customerOrderId String?
   invoiceDate     DateTime
+  /// Sous-total brut avant remise. Egale a la somme des lineAmount des items.
+  /// Conserve pour audit comptable et regenerer les PDFs (montrer la remise
+  /// appliquee).
+  subtotalAmount  Int               @default(0)
+  /// Remise globale appliquee en FCFA (defaut 0 — pas de remise).
+  discountAmount  Int               @default(0)
+  /// Motif libre de la remise (fidelite, geste commercial, soldes…).
+  discountReason  String?
+  /// Total net = subtotalAmount - discountAmount. Reste le montant facture
+  /// que le client doit payer.
   totalAmount     Int               @default(0)
   paymentMethod   SalePaymentMethod
   paymentStatus   PaymentStatus     @default(UNPAID)

@@ -6,6 +6,9 @@ type SaleInvoiceForPdf = {
   reference: string;
   type: SaleInvoiceType;
   invoiceDate: Date | string;
+  subtotalAmount?: number;
+  discountAmount?: number;
+  discountReason?: string | null;
   totalAmount: number;
   amountPaid: number;
   amountRemaining: number;
@@ -145,7 +148,35 @@ export class SalePdfService {
           .stroke();
         rowY += 8;
         doc.font('Helvetica').fontSize(10);
-        doc.text('Total :', 330, rowY, { width: 130, align: 'right' });
+
+        // Sous-total + remise si applicable (mode CAISSE)
+        const hasDiscount = (invoice.discountAmount ?? 0) > 0;
+        if (hasDiscount) {
+          doc.text('Sous-total :', 330, rowY, { width: 130, align: 'right' });
+          doc
+            .font('Helvetica')
+            .text(fmtXOF(invoice.subtotalAmount ?? invoice.totalAmount + (invoice.discountAmount ?? 0)), 460, rowY, {
+              width: 85,
+              align: 'right',
+            });
+          rowY += 18;
+          doc.font('Helvetica').fillColor('#B45309').text(
+            invoice.discountReason ? `Remise (${invoice.discountReason}) :` : 'Remise :',
+            330,
+            rowY,
+            { width: 130, align: 'right' },
+          );
+          doc.font('Helvetica-Bold').fillColor('#B45309').text(
+            `- ${fmtXOF(invoice.discountAmount ?? 0)}`,
+            460,
+            rowY,
+            { width: 85, align: 'right' },
+          );
+          doc.fillColor('#0F1F14');
+          rowY += 18;
+        }
+
+        doc.font('Helvetica').text('Total :', 330, rowY, { width: 130, align: 'right' });
         doc.font('Helvetica-Bold').text(fmtXOF(invoice.totalAmount), 460, rowY, { width: 85, align: 'right' });
 
         if (invoice.amountPaid > 0 && invoice.amountPaid < invoice.totalAmount) {

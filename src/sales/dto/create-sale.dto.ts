@@ -77,4 +77,46 @@ export class CreateSaleDto {
   @IsOptional()
   @IsBoolean()
   overrideCreditLimit?: boolean;
+
+  // ── Mode CAISSE (POS) — paiement direct + remise ─────────────────────────
+  // Ces 4 champs permettent de creer la facture, encaisser et tracer une
+  // remise en un seul appel atomique. Utilises principalement par la page
+  // /caisse qui n'a pas besoin d'enchainer 3 endpoints pour finaliser une
+  // vente au comptoir.
+
+  @ApiPropertyOptional({
+    example: 5000,
+    description:
+      "Montant de la remise en FCFA appliquee sur le total ligne (avant arrondi). Reduit le totalAmount final de la facture.",
+  })
+  @IsOptional()
+  @IsInt()
+  @Min(0)
+  discountAmount?: number;
+
+  @ApiPropertyOptional({
+    description: 'Motif de la remise (fidelite, geste commercial, soldes...)',
+  })
+  @IsOptional()
+  @IsString()
+  @MaxLength(200)
+  discountReason?: string;
+
+  @ApiPropertyOptional({
+    example: 35000,
+    description:
+      "Montant encaisse au moment de la vente. Si fourni, un CustomerPayment est cree dans la meme transaction. Peut etre inferieur au total (creance generee), egal (facture soldee) ou superieur (rendu monnaie — gere cote frontend).",
+  })
+  @IsOptional()
+  @IsInt()
+  @Min(0)
+  paidAmount?: number;
+
+  @ApiPropertyOptional({
+    description:
+      'Compte de tresorerie qui recoit le paiement. Requis si paidAmount > 0. Defaut : aucun (paiement sans compte).',
+  })
+  @IsOptional()
+  @IsUUID()
+  paymentAccountId?: string;
 }
