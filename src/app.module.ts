@@ -11,6 +11,7 @@ import { SuppliersModule } from './suppliers/suppliers.module';
 import { PurchaseOrdersModule } from './purchase-orders/purchase-orders.module';
 import { PurchaseInvoicesModule } from './purchase-invoices/purchase-invoices.module';
 import { SupplierPaymentsModule } from './supplier-payments/supplier-payments.module';
+import { SupplierCreditNotesModule } from './supplier-credit-notes/supplier-credit-notes.module';
 import { RawStockModule } from './raw-stock/raw-stock.module';
 import { RawMaterialsModule } from './raw-materials/raw-materials.module';
 import { InventoryModule } from './inventory/inventory.module';
@@ -58,6 +59,7 @@ import { RolesGuard } from './common/guards/roles.guard';
     PurchaseOrdersModule,
     PurchaseInvoicesModule,
     SupplierPaymentsModule,
+    SupplierCreditNotesModule,
     InventoryModule,
     ConservationCostsModule,
     FinishedProductsModule,

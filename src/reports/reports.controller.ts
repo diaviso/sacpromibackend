@@ -92,9 +92,35 @@ export class ReportsController {
   }
 
   @Get('payables-aging')
-  @ApiOperation({ summary: 'État des dettes fournisseurs par ancienneté' })
+  @ApiOperation({
+    summary: 'État des dettes fournisseurs par ancienneté',
+    description:
+      'Combine la dette reelle (receptions impayees) et la dette estimative (BC valides en cours de reception). Champ "kind" = "invoice" ou "engagement".',
+  })
   payablesAging() {
     return this.service.payablesAging();
+  }
+
+  @Get('receptions')
+  @ApiOperation({ summary: 'Liste des receptions (factures fournisseur) avec statut paiement' })
+  receptions(@Query() query: ProfitabilityQueryDto) {
+    return this.service.receptionsReport(query.from, query.to);
+  }
+
+  @Get('purchase-orders')
+  @ApiOperation({ summary: 'Liste des BC (filtre par statuts dont EXPIRED) avec engagements vs receptionne' })
+  purchaseOrdersReport(
+    @Query() query: ProfitabilityQueryDto,
+    @Query('status') status?: string,
+  ) {
+    const statuses = status?.split(',').map((s) => s.trim());
+    return this.service.purchaseOrdersReport(query.from, query.to, statuses);
+  }
+
+  @Get('purchases-by-supplier')
+  @ApiOperation({ summary: 'Agregat des receptions par fournisseur' })
+  purchasesBySupplier(@Query() query: ProfitabilityQueryDto) {
+    return this.service.purchasesBySupplier(query.from, query.to);
   }
 }
 

@@ -199,6 +199,54 @@ describe('PurchaseOrdersService — nouveau workflow', () => {
     });
   });
 
+  // ── close() ───────────────────────────────────────────────────────────
+
+  describe('close()', () => {
+    it('refuse si statut != DELIVERED', async () => {
+      mockPrisma.purchaseOrder.findUnique.mockResolvedValue({
+        id: 'po-1',
+        status: PurchaseOrderStatus.VALIDATED,
+        items: [],
+        purchaseInvoices: [],
+      });
+      await expect(service.close('po-1')).rejects.toThrow(/entierement receptionnes/);
+    });
+
+    it('refuse si une reception est impayee', async () => {
+      mockPrisma.purchaseOrder.findUnique.mockResolvedValue({
+        id: 'po-1',
+        status: PurchaseOrderStatus.DELIVERED,
+        items: [],
+        purchaseInvoices: [
+          { reference: 'FA-2026-0001', amountRemaining: 50000 },
+          { reference: 'FA-2026-0002', amountRemaining: 0 },
+        ],
+      });
+      await expect(service.close('po-1')).rejects.toThrow(/non solde/);
+    });
+
+    it('cloture si DELIVERED et toutes receptions soldees', async () => {
+      mockPrisma.purchaseOrder.findUnique.mockResolvedValue({
+        id: 'po-1',
+        status: PurchaseOrderStatus.DELIVERED,
+        items: [],
+        purchaseInvoices: [
+          { reference: 'FA-2026-0001', amountRemaining: 0 },
+          { reference: 'FA-2026-0002', amountRemaining: 0 },
+        ],
+      });
+      mockPrisma.purchaseOrder.update.mockResolvedValue({});
+
+      await service.close('po-1');
+
+      expect(mockPrisma.purchaseOrder.update).toHaveBeenCalledWith({
+        where: { id: 'po-1' },
+        data: { status: PurchaseOrderStatus.CLOSED },
+        include: expect.anything(),
+      });
+    });
+  });
+
   // ── getPaymentSummary() ──────────────────────────────────────────────
 
   describe('getPaymentSummary()', () => {

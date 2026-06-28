@@ -1,5 +1,5 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
-import { ExpenseActivity } from '@prisma/client';
+import { ExpenseActivity, Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 
 @Injectable()
@@ -93,7 +93,13 @@ export class ReportsService {
         _count: true,
       }),
       this.prisma.purchaseInvoice.aggregate({
-        where: { invoiceDate: { gte: from, lte: to } },
+        // Bilan de periode : on prend les receptions effectives (entree
+        // de stock reelle) et non les factures, qui peuvent dater d'un
+        // mois different. Exclut les receptions annulees.
+        where: {
+          receptionDate: { gte: from, lte: to },
+          deletedAt: null,
+        },
         _sum: { totalAmount: true },
       }),
       this.prisma.productionOrder.aggregate({
@@ -277,7 +283,12 @@ export class ReportsService {
     const items = await this.prisma.purchaseInvoiceItem.findMany({
       where: {
         rawMaterialId: materialId,
-        ...(from || to ? { purchaseInvoice: { invoiceDate: dateFilter } } : {}),
+        // Exclure les receptions annulees (soft-delete) — sinon une
+        // facture corrigee polluerait l'historique des prix.
+        purchaseInvoice: {
+          deletedAt: null,
+          ...(from || to ? { receptionDate: dateFilter } : {}),
+        },
       },
       include: {
         purchaseInvoice: {
@@ -285,11 +296,12 @@ export class ReportsService {
             id: true,
             reference: true,
             invoiceDate: true,
+            receptionDate: true,
             supplier: { select: { id: true, name: true } },
           },
         },
       },
-      orderBy: { purchaseInvoice: { invoiceDate: 'asc' } },
+      orderBy: { purchaseInvoice: { receptionDate: 'asc' } },
     });
 
     return {
@@ -300,7 +312,7 @@ export class ReportsService {
         currentAveragePrice: material.averagePrice,
       },
       history: items.map((it) => ({
-        date: it.purchaseInvoice.invoiceDate,
+        date: it.purchaseInvoice.receptionDate,
         invoiceReference: it.purchaseInvoice.reference,
         supplier: it.purchaseInvoice.supplier.name,
         quantity: Number(it.quantity),
@@ -342,23 +354,218 @@ export class ReportsService {
     }));
   }
 
+  /**
+   * Ageing des dettes fournisseur.
+   *
+   * Apres refonte Achats : la dette totale envers les fournisseurs est
+   * composee de deux briques :
+   *   1. Dette REELLE : receptions effectives non encore reglees
+   *      (PurchaseInvoice.amountRemaining > 0)
+   *   2. Dette ESTIMATIVE : BC valides ou partiellement livres dont la
+   *      marchandise n'est pas encore receptionnee (engagement pris).
+   *
+   * Le champ `kind` distingue les deux ; le tri est sur la date de
+   * reception (kind=invoice) ou expectedDate (kind=engagement).
+   */
   async payablesAging() {
-    const unpaid = await this.prisma.purchaseInvoice.findMany({
-      where: { paymentStatus: { in: ['UNPAID', 'PARTIALLY_PAID'] } },
-      include: { supplier: { select: { id: true, name: true, phone: true } } },
-      orderBy: { invoiceDate: 'asc' },
-    });
-
     const today = new Date();
-    return unpaid.map((inv) => ({
-      invoiceId: inv.id,
+
+    const [unpaidReceptions, engagedOrders] = await Promise.all([
+      this.prisma.purchaseInvoice.findMany({
+        where: {
+          paymentStatus: { in: ['UNPAID', 'PARTIALLY_PAID'] },
+          deletedAt: null,
+        },
+        include: { supplier: { select: { id: true, name: true, phone: true } } },
+        orderBy: { receptionDate: 'asc' },
+      }),
+      this.prisma.purchaseOrder.findMany({
+        where: { status: { in: ['VALIDATED', 'PARTIALLY_DELIVERED'] } },
+        include: {
+          supplier: { select: { id: true, name: true, phone: true } },
+          purchaseInvoices: {
+            where: { deletedAt: null },
+            select: { totalAmount: true },
+          },
+        },
+        orderBy: { expectedDate: 'asc' },
+      }),
+    ]);
+
+    const reception = unpaidReceptions.map((inv) => ({
+      kind: 'invoice' as const,
+      id: inv.id,
       reference: inv.reference,
       supplier: inv.supplier,
-      invoiceDate: inv.invoiceDate,
+      date: inv.receptionDate,
       totalAmount: inv.totalAmount,
       amountRemaining: inv.amountRemaining,
-      daysOverdue: Math.floor((today.getTime() - inv.invoiceDate.getTime()) / (24 * 60 * 60 * 1000)),
+      daysOverdue: Math.floor(
+        (today.getTime() - inv.receptionDate.getTime()) / (24 * 60 * 60 * 1000),
+      ),
     }));
+
+    const engagement = engagedOrders
+      .map((order) => {
+        const received = order.purchaseInvoices.reduce((s, i) => s + i.totalAmount, 0);
+        const engaged = Math.max(0, order.totalAmount - received);
+        return { order, engaged };
+      })
+      .filter(({ engaged }) => engaged > 0)
+      .map(({ order, engaged }) => ({
+        kind: 'engagement' as const,
+        id: order.id,
+        reference: order.reference,
+        supplier: order.supplier,
+        date: order.expectedDate ?? order.orderDate,
+        totalAmount: order.totalAmount,
+        amountRemaining: engaged,
+        daysOverdue: order.expectedDate
+          ? Math.floor((today.getTime() - order.expectedDate.getTime()) / (24 * 60 * 60 * 1000))
+          : 0,
+      }));
+
+    return [...reception, ...engagement].sort(
+      (a, b) => b.daysOverdue - a.daysOverdue,
+    );
+  }
+
+  // ========================================================================
+  // RAPPORT RECEPTIONS (anciennement factures d'achat)
+  // ========================================================================
+  async receptionsReport(from?: string, to?: string) {
+    const dateFilter: { gte?: Date; lte?: Date } = {};
+    if (from) dateFilter.gte = new Date(from);
+    if (to) dateFilter.lte = new Date(to);
+
+    const items = await this.prisma.purchaseInvoice.findMany({
+      where: {
+        deletedAt: null,
+        ...(from || to ? { receptionDate: dateFilter } : {}),
+      },
+      include: {
+        supplier: { select: { id: true, name: true } },
+        purchaseOrder: { select: { id: true, reference: true, status: true } },
+        _count: { select: { items: true, payments: true } },
+      },
+      orderBy: { receptionDate: 'desc' },
+    });
+
+    return items.map((r) => ({
+      id: r.id,
+      reference: r.reference,
+      supplierInvoiceNumber: r.supplierInvoiceNumber,
+      receptionDate: r.receptionDate,
+      invoiceDate: r.invoiceDate,
+      supplier: r.supplier,
+      bcReference: r.purchaseOrder?.reference ?? null,
+      totalAmount: r.totalAmount,
+      amountPaid: r.amountPaid,
+      amountRemaining: r.amountRemaining,
+      paymentStatus: r.paymentStatus,
+      itemCount: r._count.items,
+      paymentCount: r._count.payments,
+    }));
+  }
+
+  // ========================================================================
+  // RAPPORT BONS DE COMMANDE (avec EXPIRED)
+  // ========================================================================
+  async purchaseOrdersReport(
+    from?: string,
+    to?: string,
+    statuses?: string[],
+  ) {
+    const dateFilter: { gte?: Date; lte?: Date } = {};
+    if (from) dateFilter.gte = new Date(from);
+    if (to) dateFilter.lte = new Date(to);
+
+    const allowed = ['DRAFT', 'VALIDATED', 'PARTIALLY_DELIVERED', 'DELIVERED', 'CLOSED', 'EXPIRED', 'CANCELLED'];
+    const filterStatuses = statuses?.filter((s) => allowed.includes(s)) as
+      | Prisma.EnumPurchaseOrderStatusFilter['in']
+      | undefined;
+
+    const orders = await this.prisma.purchaseOrder.findMany({
+      where: {
+        ...(from || to ? { orderDate: dateFilter } : {}),
+        ...(filterStatuses && filterStatuses.length > 0 ? { status: { in: filterStatuses } } : {}),
+      },
+      include: {
+        supplier: { select: { id: true, name: true } },
+        purchaseInvoices: {
+          where: { deletedAt: null },
+          select: { totalAmount: true },
+        },
+        _count: { select: { items: true } },
+      },
+      orderBy: { orderDate: 'desc' },
+    });
+
+    return orders.map((o) => {
+      const received = o.purchaseInvoices.reduce((s, i) => s + i.totalAmount, 0);
+      return {
+        id: o.id,
+        reference: o.reference,
+        orderDate: o.orderDate,
+        expectedDate: o.expectedDate,
+        validatedAt: o.validatedAt,
+        status: o.status,
+        supplier: o.supplier,
+        estimatedTotalAmount: o.totalAmount,
+        receivedAmount: received,
+        unbilledEstimate: Math.max(0, o.totalAmount - received),
+        itemCount: o._count.items,
+      };
+    });
+  }
+
+  // ========================================================================
+  // AGREGAT ACHATS PAR FOURNISSEUR
+  // ========================================================================
+  async purchasesBySupplier(from?: string, to?: string) {
+    const dateFilter: { gte?: Date; lte?: Date } = {};
+    if (from) dateFilter.gte = new Date(from);
+    if (to) dateFilter.lte = new Date(to);
+
+    const receptions = await this.prisma.purchaseInvoice.findMany({
+      where: {
+        deletedAt: null,
+        ...(from || to ? { receptionDate: dateFilter } : {}),
+      },
+      include: { supplier: { select: { id: true, name: true } } },
+    });
+
+    const map = new Map<
+      string,
+      {
+        supplierId: string;
+        supplierName: string;
+        receptionCount: number;
+        totalReceived: number;
+        totalPaid: number;
+        totalRemaining: number;
+      }
+    >();
+    for (const r of receptions) {
+      const k = r.supplierId;
+      const existing = map.get(k);
+      if (existing) {
+        existing.receptionCount++;
+        existing.totalReceived += r.totalAmount;
+        existing.totalPaid += r.amountPaid;
+        existing.totalRemaining += r.amountRemaining;
+      } else {
+        map.set(k, {
+          supplierId: k,
+          supplierName: r.supplier.name,
+          receptionCount: 1,
+          totalReceived: r.totalAmount,
+          totalPaid: r.amountPaid,
+          totalRemaining: r.amountRemaining,
+        });
+      }
+    }
+    return Array.from(map.values()).sort((a, b) => b.totalReceived - a.totalReceived);
   }
 
   // ========================================================================

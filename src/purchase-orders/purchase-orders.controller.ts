@@ -110,6 +110,17 @@ export class PurchaseOrdersController {
     return this.service.cancel(id, dto);
   }
 
+  @Patch(':id/close')
+  @Roles(UserRole.DIRECTOR, UserRole.PRODUCTION_MANAGER)
+  @ApiOperation({
+    summary: 'Cloturer un BC entierement receptionne ET solde',
+    description:
+      'Transition DELIVERED -> CLOSED. Etat terminal. Refuse si des receptions sont impayees.',
+  })
+  close(@Param('id', new ParseUUIDPipe()) id: string) {
+    return this.service.close(id);
+  }
+
   @Patch(':id/expire')
   @Roles(UserRole.DIRECTOR, UserRole.PRODUCTION_MANAGER)
   @ApiOperation({

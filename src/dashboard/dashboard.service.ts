@@ -84,7 +84,12 @@ export class DashboardService {
         _sum: { totalAmount: true },
       }),
       this.prisma.purchaseInvoice.aggregate({
-        where: { invoiceDate: { gte: range.from, lte: range.to } },
+        where: {
+          // Mesure base sur la reception physique (entree stock effective),
+          // pas la date facture papier. Exclut les receptions annulees.
+          receptionDate: { gte: range.from, lte: range.to },
+          deletedAt: null,
+        },
         _sum: { totalAmount: true },
       }),
       this.prisma.productionOrder.aggregate({
@@ -324,7 +329,10 @@ export class DashboardService {
       this.prisma.purchaseInvoice.count({
         where: {
           paymentStatus: { in: ['UNPAID', 'PARTIALLY_PAID'] },
-          invoiceDate: { lt: new Date(today.getTime() - 30 * 24 * 60 * 60 * 1000) },
+          // Anciennete calculee sur la reception physique (date d'engagement
+          // reel envers le fournisseur). Exclure les receptions annulees.
+          receptionDate: { lt: new Date(today.getTime() - 30 * 24 * 60 * 60 * 1000) },
+          deletedAt: null,
         },
       }),
       this.prisma.saleInvoice.count({
@@ -398,7 +406,10 @@ export class DashboardService {
           _sum: { amount: true },
         }),
         this.prisma.purchaseInvoice.aggregate({
-          where: { paymentStatus: { in: ['UNPAID', 'PARTIALLY_PAID'] } },
+          where: {
+            paymentStatus: { in: ['UNPAID', 'PARTIALLY_PAID'] },
+            deletedAt: null,
+          },
           _sum: { amountRemaining: true },
         }),
         this.prisma.saleInvoice.aggregate({
@@ -482,9 +493,12 @@ export class DashboardService {
   // ========================================================================
   async supplierDebts() {
     const unpaidInvoices = await this.prisma.purchaseInvoice.findMany({
-      where: { paymentStatus: { in: [PaymentStatus.UNPAID, PaymentStatus.PARTIALLY_PAID] } },
+      where: {
+        paymentStatus: { in: [PaymentStatus.UNPAID, PaymentStatus.PARTIALLY_PAID] },
+        deletedAt: null,
+      },
       include: { supplier: { select: { id: true, name: true } } },
-      orderBy: { invoiceDate: 'asc' },
+      orderBy: { receptionDate: 'asc' },
     });
 
     const totalDue = unpaidInvoices.reduce((sum, inv) => sum + inv.amountRemaining, 0);
@@ -511,7 +525,7 @@ export class DashboardService {
     const today = new Date();
     const overdueThreshold = new Date(today.getTime() - 30 * 24 * 60 * 60 * 1000);
     const overdueInvoices = unpaidInvoices
-      .filter((inv) => inv.invoiceDate < overdueThreshold)
+      .filter((inv) => inv.receptionDate < overdueThreshold)
       .map((inv) => ({
         id: inv.id,
         reference: inv.reference,
@@ -519,10 +533,11 @@ export class DashboardService {
         supplierId: inv.supplierId,
         supplierName: inv.supplier.name,
         invoiceDate: inv.invoiceDate,
+        receptionDate: inv.receptionDate,
         totalAmount: inv.totalAmount,
         amountRemaining: inv.amountRemaining,
-        daysSinceInvoice: Math.floor(
-          (today.getTime() - inv.invoiceDate.getTime()) / (24 * 60 * 60 * 1000),
+        daysSinceReception: Math.floor(
+          (today.getTime() - inv.receptionDate.getTime()) / (24 * 60 * 60 * 1000),
         ),
       }));
 
@@ -532,6 +547,116 @@ export class DashboardService {
       invoiceCount: unpaidInvoices.length,
       bySupplier: Array.from(bySupplierMap.values()).sort((a, b) => b.totalDue - a.totalDue),
       overdueInvoices,
+    };
+  }
+
+  // ========================================================================
+  // ENGAGEMENTS FOURNISSEURS (nouveau workflow Achats)
+  // ========================================================================
+  /**
+   * Retourne la dette engagee envers les fournisseurs : somme des montants
+   * estimatifs des BC valides ou partiellement livres, deduction faite de
+   * ce qui est deja receptionne (et qui releve donc de supplierDebts).
+   *
+   * Egalement : liste des BC dont la livraison est attendue dans les 7 jours
+   * ou en retard, pour permettre un suivi proactif.
+   */
+  async supplierEngagements() {
+    const today = new Date();
+    const in7Days = new Date(today.getTime() + 7 * 24 * 60 * 60 * 1000);
+
+    const activeOrders = await this.prisma.purchaseOrder.findMany({
+      where: {
+        status: { in: ['VALIDATED', 'PARTIALLY_DELIVERED'] },
+      },
+      include: {
+        supplier: { select: { id: true, name: true } },
+        purchaseInvoices: {
+          where: { deletedAt: null },
+          select: { totalAmount: true },
+        },
+      },
+      orderBy: { expectedDate: 'asc' },
+    });
+
+    let totalEstimated = 0;
+    let totalReceived = 0;
+    let totalEngagedDebt = 0; // estimatif - receptionne (jamais < 0)
+    const bySupplierMap = new Map<
+      string,
+      {
+        supplierId: string;
+        supplierName: string;
+        orderCount: number;
+        engagedDebt: number;
+      }
+    >();
+    const upcoming: Array<{
+      id: string;
+      reference: string;
+      supplierId: string;
+      supplierName: string;
+      expectedDate: Date | null;
+      status: string;
+      estimatedTotalAmount: number;
+      receivedAmount: number;
+      engagedDebt: number;
+      daysUntilExpected: number | null;
+    }> = [];
+
+    for (const order of activeOrders) {
+      const received = order.purchaseInvoices.reduce((s, i) => s + i.totalAmount, 0);
+      const engaged = Math.max(0, order.totalAmount - received);
+      totalEstimated += order.totalAmount;
+      totalReceived += received;
+      totalEngagedDebt += engaged;
+
+      const existing = bySupplierMap.get(order.supplierId);
+      if (existing) {
+        existing.orderCount++;
+        existing.engagedDebt += engaged;
+      } else {
+        bySupplierMap.set(order.supplierId, {
+          supplierId: order.supplierId,
+          supplierName: order.supplier.name,
+          orderCount: 1,
+          engagedDebt: engaged,
+        });
+      }
+
+      // Liste des BC a echeance proche ou en retard
+      if (order.expectedDate && engaged > 0) {
+        const isOverdueOrSoon = order.expectedDate <= in7Days;
+        if (isOverdueOrSoon) {
+          upcoming.push({
+            id: order.id,
+            reference: order.reference,
+            supplierId: order.supplierId,
+            supplierName: order.supplier.name,
+            expectedDate: order.expectedDate,
+            status: order.status,
+            estimatedTotalAmount: order.totalAmount,
+            receivedAmount: received,
+            engagedDebt: engaged,
+            daysUntilExpected: Math.floor(
+              (order.expectedDate.getTime() - today.getTime()) / (24 * 60 * 60 * 1000),
+            ),
+          });
+        }
+      }
+    }
+
+    return {
+      totalEstimated,
+      totalReceived,
+      totalEngagedDebt,
+      orderCount: activeOrders.length,
+      bySupplier: Array.from(bySupplierMap.values()).sort(
+        (a, b) => b.engagedDebt - a.engagedDebt,
+      ),
+      upcoming: upcoming.sort((a, b) =>
+        (a.expectedDate?.getTime() ?? 0) - (b.expectedDate?.getTime() ?? 0),
+      ),
     };
   }
 }

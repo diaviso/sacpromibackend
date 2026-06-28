@@ -177,9 +177,15 @@ function extractAction(
     invalidate: AuditAction.INVALIDATE,
     activate: AuditAction.ACTIVATE,
     deactivate: AuditAction.DEACTIVATE,
+    close: AuditAction.OTHER,
+    expire: AuditAction.OTHER,
     dispose: AuditAction.OTHER,
     'declare-loss': AuditAction.OTHER,
     'export-csv': AuditAction.EXPORT,
+    // Mode POS achats (achat comptoir) — POST /purchase-invoices/quick-purchase
+    // logiquement c'est un CREATE de PurchaseInvoice (avec BC et paiement
+    // associes), pas une "OTHER" generique.
+    'quick-purchase': AuditAction.CREATE,
   };
   if (last && verbMap[last]) {
     return { action: verbMap[last], entityType, entityId };

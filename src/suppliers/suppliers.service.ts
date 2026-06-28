@@ -44,28 +44,61 @@ export class SuppliersService {
     return supplier;
   }
 
-  /** Fiche fournisseur enrichie : stats (nb factures, total acheté, dettes). */
+  /**
+   * Fiche fournisseur enrichie : stats (nb receptions, total receptionne,
+   * dettes reelle, engagement BC).
+   *
+   * Tous les agregats excluent les receptions annulees (soft-delete) et
+   * remontent egalement l'engagement estimatif issu des BC valides en
+   * cours de reception — vue alignee avec le nouveau workflow Achats.
+   */
   async findOne(id: string) {
     const supplier = await this.findOneRaw(id);
 
-    const [invoiceCount, totalsAgg, debtAgg] = await this.prisma.$transaction([
-      this.prisma.purchaseInvoice.count({ where: { supplierId: id } }),
+    const [receptionCount, totalsAgg, debtAgg, activeOrders] = await this.prisma.$transaction([
+      this.prisma.purchaseInvoice.count({
+        where: { supplierId: id, deletedAt: null },
+      }),
       this.prisma.purchaseInvoice.aggregate({
-        where: { supplierId: id },
+        where: { supplierId: id, deletedAt: null },
         _sum: { totalAmount: true },
       }),
       this.prisma.purchaseInvoice.aggregate({
-        where: { supplierId: id, paymentStatus: { in: ['UNPAID', 'PARTIALLY_PAID'] } },
+        where: {
+          supplierId: id,
+          paymentStatus: { in: ['UNPAID', 'PARTIALLY_PAID'] },
+          deletedAt: null,
+        },
         _sum: { amountRemaining: true },
       }),
+      this.prisma.purchaseOrder.findMany({
+        where: {
+          supplierId: id,
+          status: { in: ['VALIDATED', 'PARTIALLY_DELIVERED'] },
+        },
+        select: {
+          totalAmount: true,
+          purchaseInvoices: {
+            where: { deletedAt: null },
+            select: { totalAmount: true },
+          },
+        },
+      }),
     ]);
+
+    const engagedDebt = activeOrders.reduce((sum, o) => {
+      const received = o.purchaseInvoices.reduce((s, i) => s + i.totalAmount, 0);
+      return sum + Math.max(0, o.totalAmount - received);
+    }, 0);
 
     return {
       ...supplier,
       stats: {
-        invoiceCount,
-        totalPurchased: totalsAgg._sum.totalAmount ?? 0,
+        receptionCount,
+        totalReceived: totalsAgg._sum.totalAmount ?? 0,
         debtBalance: debtAgg._sum.amountRemaining ?? 0,
+        engagedDebt,
+        activeOrderCount: activeOrders.length,
       },
     };
   }
@@ -86,10 +119,12 @@ export class SuppliersService {
   }
 
   async remove(id: string) {
-    const invoiceCount = await this.prisma.purchaseInvoice.count({ where: { supplierId: id } });
-    if (invoiceCount > 0) {
+    const receptionCount = await this.prisma.purchaseInvoice.count({
+      where: { supplierId: id, deletedAt: null },
+    });
+    if (receptionCount > 0) {
       throw new ConflictException(
-        'Impossible de supprimer un fournisseur ayant des factures. Désactivez-le à la place.',
+        'Impossible de supprimer un fournisseur ayant des réceptions. Désactivez-le à la place.',
       );
     }
     await this.prisma.supplier.delete({ where: { id } });

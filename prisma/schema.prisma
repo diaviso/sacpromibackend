@@ -301,6 +301,7 @@ model User {
   purchaseOrdersCreated       PurchaseOrder[]
   purchaseInvoicesCreated     PurchaseInvoice[]
   supplierPaymentsCreated     SupplierPayment[]
+  supplierCreditNotesCreated  SupplierCreditNote[]
   stockMovementsCreated       RawStockMovement[]
   inventoriesCreated          Inventory[]
   conservationCostsCreated    ConservationCost[]
@@ -446,9 +447,10 @@ model Supplier {
   createdAt        DateTime @default(now())
   updatedAt        DateTime @updatedAt
 
-  purchaseOrders   PurchaseOrder[]
-  purchaseInvoices PurchaseInvoice[]
-  rawMaterialLots  RawMaterialLot[]
+  purchaseOrders      PurchaseOrder[]
+  purchaseInvoices    PurchaseInvoice[]
+  rawMaterialLots     RawMaterialLot[]
+  supplierCreditNotes SupplierCreditNote[]
 
   @@index([name])
   @@index([isActive])
@@ -544,6 +546,7 @@ model PurchaseInvoice {
   items           PurchaseInvoiceItem[]
   payments        SupplierPayment[]
   rawMaterialLots RawMaterialLot[]
+  creditNotes     SupplierCreditNote[]
 
   @@index([supplierId])
   @@index([purchaseOrderId])
@@ -551,6 +554,81 @@ model PurchaseInvoice {
   @@index([invoiceDate])
   @@index([reference])
   @@map("purchase_invoices")
+}
+
+// =====================================================
+// SUPPLIER CREDIT NOTE (Avoir fournisseur — retour marchandise)
+// =====================================================
+//
+// Un avoir fournisseur est un document qui materialise un retour de
+// marchandise au fournisseur (livraison non conforme, surfacturation,
+// produit defectueux). Il est lie a une PurchaseInvoice (la reception
+// qu'il corrige).
+//
+// Effets metier de la creation d'un avoir :
+//   - Mouvement stock ADJUSTMENT(-qty) sur le lot d'origine
+//   - Decrement de currentStock sur la matiere
+//   - Decrement de amountRemaining sur la PurchaseInvoice parent
+//     (la dette envers le fournisseur diminue d'autant)
+//   - Si la facture etait deja entierement payee, l'avoir genere une
+//     "creance fournisseur" (le fournisseur nous doit cette somme) qui
+//     pourra etre deduite d'une prochaine facture. C'est gere par le
+//     champ amountRemaining qui peut devenir negatif (interpretation :
+//     credit fournisseur).
+//
+// Soft-delete supporte pour traçabilite comptable.
+
+model SupplierCreditNote {
+  id                String                   @id @default(uuid())
+  reference         String                   @unique // ex: AVR-2026-0001
+  purchaseInvoiceId String // facture/reception parent
+  supplierId        String // denormalise pour requetes
+  /// Date de l'avoir (peut differer de la reception parent).
+  creditDate        DateTime
+  /// Total de l'avoir = somme des lineAmount des items.
+  totalAmount       Int                      @default(0)
+  /// Motif obligatoire (livraison non conforme, geste commercial, etc.).
+  reason            String                   @db.Text
+  /// Soft-delete (annulation comptable).
+  deletedAt         DateTime?
+  deletedReason     String?                  @db.Text
+  createdById       String
+  createdAt         DateTime                 @default(now())
+  updatedAt         DateTime                 @updatedAt
+
+  purchaseInvoice PurchaseInvoice              @relation(fields: [purchaseInvoiceId], references: [id])
+  supplier        Supplier                     @relation(fields: [supplierId], references: [id])
+  createdBy       User                         @relation(fields: [createdById], references: [id])
+  items           SupplierCreditNoteItem[]
+
+  @@index([purchaseInvoiceId])
+  @@index([supplierId])
+  @@index([creditDate])
+  @@index([reference])
+  @@map("supplier_credit_notes")
+}
+
+model SupplierCreditNoteItem {
+  id                   String  @id @default(uuid())
+  supplierCreditNoteId String
+  /// Reference de la ligne de facture parent (pour tracer ce qui est retourne)
+  purchaseInvoiceItemId String?
+  rawMaterialId        String
+  rawMaterialLotId     String? // lot d'origine de la marchandise retournee
+  itemName             String
+  quantity             Decimal @db.Decimal(14, 4)
+  unit                 String
+  unitPrice            Int // prix unitaire repris de la facture parent
+  lineAmount           Int
+
+  supplierCreditNote SupplierCreditNote   @relation(fields: [supplierCreditNoteId], references: [id], onDelete: Cascade)
+  rawMaterial        RawMaterial          @relation(fields: [rawMaterialId], references: [id])
+  rawMaterialLot     RawMaterialLot?      @relation(fields: [rawMaterialLotId], references: [id])
+
+  @@index([supplierCreditNoteId])
+  @@index([rawMaterialId])
+  @@index([rawMaterialLotId])
+  @@map("supplier_credit_note_items")
 }
 
 model PurchaseInvoiceItem {
@@ -619,12 +697,13 @@ model RawMaterial {
   createdAt      DateTime            @default(now())
   updatedAt      DateTime            @updatedAt
 
-  lots                 RawMaterialLot[]
-  movements            RawStockMovement[]
-  purchaseOrderItems   PurchaseOrderItem[]
-  purchaseInvoiceItems PurchaseInvoiceItem[]
-  inventoryItems       InventoryItem[]
-  formulaItems         FormulaItem[]
+  lots                    RawMaterialLot[]
+  movements               RawStockMovement[]
+  purchaseOrderItems      PurchaseOrderItem[]
+  purchaseInvoiceItems    PurchaseInvoiceItem[]
+  inventoryItems          InventoryItem[]
+  formulaItems            FormulaItem[]
+  supplierCreditNoteItems SupplierCreditNoteItem[]
 
   @@index([code])
   @@index([category])
@@ -648,10 +727,11 @@ model RawMaterialLot {
   createdAt            DateTime  @default(now())
   updatedAt            DateTime  @updatedAt
 
-  rawMaterial     RawMaterial        @relation(fields: [rawMaterialId], references: [id])
-  purchaseInvoice PurchaseInvoice?   @relation(fields: [purchaseInvoiceId], references: [id])
-  supplier        Supplier?          @relation(fields: [supplierId], references: [id])
-  movements       RawStockMovement[]
+  rawMaterial             RawMaterial              @relation(fields: [rawMaterialId], references: [id])
+  purchaseInvoice         PurchaseInvoice?         @relation(fields: [purchaseInvoiceId], references: [id])
+  supplier                Supplier?                @relation(fields: [supplierId], references: [id])
+  movements               RawStockMovement[]
+  supplierCreditNoteItems SupplierCreditNoteItem[]
 
   @@index([rawMaterialId])
   @@index([status])

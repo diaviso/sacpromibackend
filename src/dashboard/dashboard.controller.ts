@@ -80,6 +80,16 @@ export class DashboardController {
     return this.service.supplierDebts();
   }
 
+  @Get('supplier-engagements')
+  @ApiOperation({
+    summary: 'Engagements fournisseurs : BC valides en cours + alertes BC a livraison proche',
+    description:
+      'Retourne la dette estimative engagee (somme totalAmount des BC VALIDATED/PARTIALLY_DELIVERED moins receptions deja faites) + liste des BC dont expectedDate est dans les 7 jours ou en retard.',
+  })
+  supplierEngagements() {
+    return this.service.supplierEngagements();
+  }
+
   @Get('customer-receivables')
   @ApiOperation({ summary: 'Créances clients par ancienneté (<30j, 30-60j, >60j)' })
   customerReceivables() {

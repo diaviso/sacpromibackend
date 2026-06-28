@@ -403,6 +403,42 @@ export class PurchaseOrdersService {
   }
 
   /**
+   * Cloture officiellement un BC.
+   *
+   * Conditions strictes :
+   *   - Statut DELIVERED (toutes les lignes receptionnees)
+   *   - Toutes les receptions sont entierement payees
+   *     (amountRemaining = 0 sur chacune)
+   *
+   * La cloture transitionne DELIVERED -> CLOSED. C'est un etat terminal
+   * qui marque la fin de vie du BC (engagement entierement satisfait,
+   * trace conservee mais retiree du portefeuille actif).
+   */
+  async close(id: string) {
+    const order = await this.findOne(id);
+    if (order.status !== PurchaseOrderStatus.DELIVERED) {
+      throw new BadRequestException(
+        `Seuls les BC entierement receptionnes peuvent etre clotures (statut actuel : ${order.status})`,
+      );
+    }
+    const unpaidReceptions = (order.purchaseInvoices ?? []).filter(
+      (inv) => inv.amountRemaining > 0,
+    );
+    if (unpaidReceptions.length > 0) {
+      const refs = unpaidReceptions.map((r) => r.reference).join(', ');
+      throw new BadRequestException(
+        `Impossible de cloturer : ${unpaidReceptions.length} reception(s) non solde(es) ` +
+          `(${refs}). Reglez d'abord les paiements.`,
+      );
+    }
+    return this.prisma.purchaseOrder.update({
+      where: { id },
+      data: { status: PurchaseOrderStatus.CLOSED },
+      include: { items: true, supplier: { select: { id: true, name: true } } },
+    });
+  }
+
+  /**
    * Bascule un BC en statut EXPIRED.
    *
    * Cas d'usage : BC valide depuis longtemps qui ne sera jamais receptionne
