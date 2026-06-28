@@ -238,6 +238,17 @@ export class PurchaseOrdersService {
                 rawMaterial: { select: { id: true, code: true, name: true } },
               },
             },
+            creditNotes: {
+              where: { deletedAt: null },
+              orderBy: { creditDate: 'desc' },
+              select: {
+                id: true,
+                reference: true,
+                creditDate: true,
+                totalAmount: true,
+                reason: true,
+              },
+            },
           },
         },
       },

@@ -115,6 +115,17 @@ export class PurchaseInvoicesService {
         0,
       );
 
+      // Pre-resoudre les lotNumber avant d'inserer les items. Le lotNumber
+      // est ECRIT sur le PurchaseInvoiceItem ET sur le RawMaterialLot pour
+      // permettre une jointure precise et sans ambiguite lors d'un retour
+      // (avoir fournisseur). Sans ca, un avoir sur une facture multi-lots
+      // ne saurait pas quel lot decremente.
+      const itemsWithLotNumber = itemsWithTransport.map((item, i) => ({
+        ...item,
+        resolvedLotNumber:
+          item.lotNumber ?? `${reference}-L${(i + 1).toString().padStart(2, '0')}`,
+      }));
+
       const invoice = await tx.purchaseInvoice.create({
         data: {
           reference,
@@ -130,7 +141,7 @@ export class PurchaseInvoicesService {
           scanUrl: dto.scanUrl,
           createdById: userId,
           items: {
-            create: itemsWithTransport.map((item) => ({
+            create: itemsWithLotNumber.map((item) => ({
               rawMaterialId: item.rawMaterialId,
               itemName: item.itemName,
               quantity: item.quantity,
@@ -138,7 +149,7 @@ export class PurchaseInvoicesService {
               unitPrice: item.unitPrice,
               transportCost: item.transportCost ?? 0,
               lineAmount: Math.round(item.quantity * item.unitPrice),
-              lotNumber: item.lotNumber,
+              lotNumber: item.resolvedLotNumber,
               expirationDate: item.expirationDate ? new Date(item.expirationDate) : null,
             })),
           },
@@ -147,14 +158,10 @@ export class PurchaseInvoicesService {
       });
 
       // Créer un lot par ligne + entrée stock + recalcul prix moyen pondéré
-      for (let i = 0; i < itemsWithTransport.length; i++) {
-        const item = itemsWithTransport[i];
-        const lotNumber =
-          item.lotNumber ?? `${reference}-L${(i + 1).toString().padStart(2, '0')}`;
-
+      for (const item of itemsWithLotNumber) {
         await this.rawStockService.createLotFromPurchase(tx, {
           rawMaterialId: item.rawMaterialId,
-          lotNumber,
+          lotNumber: item.resolvedLotNumber,
           purchaseInvoiceId: invoice.id,
           supplierId: dto.supplierId,
           quantity: item.quantity,
@@ -240,6 +247,18 @@ export class PurchaseInvoicesService {
         rawMaterialLots: {
           include: { rawMaterial: { select: { id: true, code: true, name: true } } },
         },
+        creditNotes: {
+          where: { deletedAt: null },
+          orderBy: { creditDate: 'desc' },
+          select: {
+            id: true,
+            reference: true,
+            creditDate: true,
+            totalAmount: true,
+            reason: true,
+            _count: { select: { items: true } },
+          },
+        },
       },
     });
     if (!invoice) {
@@ -321,6 +340,10 @@ export class PurchaseInvoicesService {
         items: true,
         payments: true,
         rawMaterialLots: true,
+        creditNotes: {
+          where: { deletedAt: null },
+          select: { id: true, reference: true },
+        },
       },
     });
     if (!invoice) throw new NotFoundException(`Facture ${id} introuvable`);
@@ -328,6 +351,13 @@ export class PurchaseInvoicesService {
     if (invoice.payments.length > 0) {
       throw new BadRequestException(
         `Impossible : ${invoice.payments.length} paiement(s) enregistré(s). Annulez les paiements d'abord.`,
+      );
+    }
+    if (invoice.creditNotes.length > 0) {
+      const refs = invoice.creditNotes.map((c) => c.reference).join(', ');
+      throw new BadRequestException(
+        `Impossible : ${invoice.creditNotes.length} avoir(s) lie(s) (${refs}). ` +
+          `Annulez les avoirs d'abord (ils auraient un effet stock double sinon).`,
       );
     }
 
@@ -548,6 +578,12 @@ export class PurchaseInvoicesService {
         purchaseDate.getFullYear(),
         tx,
       );
+      // Pre-resoudre lotNumber par item — meme principe que dans create()
+      const itemsWithLotNumber = itemsWithTransport.map((item, i) => ({
+        ...item,
+        resolvedLotNumber: `${faReference}-L${(i + 1).toString().padStart(2, '0')}`,
+      }));
+
       const invoice = await tx.purchaseInvoice.create({
         data: {
           reference: faReference,
@@ -563,7 +599,7 @@ export class PurchaseInvoicesService {
           scanUrl: dto.scanUrl,
           createdById: userId,
           items: {
-            create: itemsWithTransport.map((item) => ({
+            create: itemsWithLotNumber.map((item) => ({
               rawMaterialId: item.rawMaterialId,
               itemName: item.itemName,
               quantity: item.quantity,
@@ -571,6 +607,7 @@ export class PurchaseInvoicesService {
               unitPrice: item.unitPrice,
               transportCost: item.transportCost,
               lineAmount: Math.round(item.quantity * item.unitPrice),
+              lotNumber: item.resolvedLotNumber,
             })),
           },
         },
@@ -578,12 +615,10 @@ export class PurchaseInvoicesService {
       });
 
       // ── 4. Creer les lots + mouvements stock + PMP ────────────────────
-      for (let i = 0; i < itemsWithTransport.length; i++) {
-        const item = itemsWithTransport[i];
-        const lotNumber = `${faReference}-L${(i + 1).toString().padStart(2, '0')}`;
+      for (const item of itemsWithLotNumber) {
         await this.rawStockService.createLotFromPurchase(tx, {
           rawMaterialId: item.rawMaterialId,
-          lotNumber,
+          lotNumber: item.resolvedLotNumber,
           purchaseInvoiceId: invoice.id,
           supplierId: dto.supplierId,
           quantity: item.quantity,

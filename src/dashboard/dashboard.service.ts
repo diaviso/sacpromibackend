@@ -78,7 +78,7 @@ export class DashboardService {
   }
 
   private async computeMetrics(range: PeriodRange) {
-    const [salesAgg, purchaseAgg, productionAgg, expensesAgg, salesCount] = await Promise.all([
+    const [salesAgg, purchaseAgg, creditsAgg, productionAgg, expensesAgg, salesCount] = await Promise.all([
       this.prisma.saleInvoice.aggregate({
         where: { invoiceDate: { gte: range.from, lte: range.to }, totalAmount: { gt: 0 } },
         _sum: { totalAmount: true },
@@ -88,6 +88,15 @@ export class DashboardService {
           // Mesure base sur la reception physique (entree stock effective),
           // pas la date facture papier. Exclut les receptions annulees.
           receptionDate: { gte: range.from, lte: range.to },
+          deletedAt: null,
+        },
+        _sum: { totalAmount: true },
+      }),
+      // Avoirs fournisseurs emis dans la periode — deduits du cout matiere
+      // brut pour refleter le cout NET reellement consomme.
+      this.prisma.supplierCreditNote.aggregate({
+        where: {
+          creditDate: { gte: range.from, lte: range.to },
           deletedAt: null,
         },
         _sum: { totalAmount: true },
@@ -109,7 +118,10 @@ export class DashboardService {
     ]);
 
     const revenue = salesAgg._sum.totalAmount ?? 0;
-    const rawMaterialCost = purchaseAgg._sum.totalAmount ?? 0;
+    const rawMaterialCost = Math.max(
+      0,
+      (purchaseAgg._sum.totalAmount ?? 0) - (creditsAgg._sum.totalAmount ?? 0),
+    );
     const productionCost = productionAgg._sum.transformationCost ?? 0;
     const grossMargin = revenue - rawMaterialCost - productionCost;
     const expenses = expensesAgg._sum.amount ?? 0;
@@ -140,7 +152,7 @@ export class DashboardService {
     const range = rangeForPeriod(period, from, to);
 
     // Production = ventes d'aliments - matières - charges PRODUCTION
-    const [feedSales, animalSales, materialsCost, productionExpenses, breedingExpenses, commercialExpenses, generalExpenses, batchCosts] =
+    const [feedSales, animalSales, materialsCost, materialsCredits, productionExpenses, breedingExpenses, commercialExpenses, generalExpenses, batchCosts] =
       await Promise.all([
         this.prisma.saleInvoiceItem.aggregate({
           where: {
@@ -157,7 +169,17 @@ export class DashboardService {
           _sum: { lineAmount: true },
         }),
         this.prisma.purchaseInvoice.aggregate({
-          where: { invoiceDate: { gte: range.from, lte: range.to } },
+          where: {
+            // Filtre receptionDate + deletedAt=null pour ne pas compter
+            // les receptions annulees ni s'aligner sur la date facture.
+            receptionDate: { gte: range.from, lte: range.to },
+            deletedAt: null,
+          },
+          _sum: { totalAmount: true },
+        }),
+        // Avoirs emis dans la periode — deduits du cout matiere.
+        this.prisma.supplierCreditNote.aggregate({
+          where: { creditDate: { gte: range.from, lte: range.to }, deletedAt: null },
           _sum: { totalAmount: true },
         }),
         this.prisma.expense.aggregate({
@@ -203,7 +225,13 @@ export class DashboardService {
 
     const productionRevenue = feedSales._sum.lineAmount ?? 0;
     const breedingRevenue = animalSales._sum.lineAmount ?? 0;
-    const productionMaterialsCost = materialsCost._sum.totalAmount ?? 0;
+    // Cout matiere NET = receptions brutes - avoirs emis dans la periode.
+    // Si avoirs > brut (cas rare : retours sur receptions d'avant la
+    // periode), on plafonne a 0 pour eviter un cout negatif.
+    const productionMaterialsCost = Math.max(
+      0,
+      (materialsCost._sum.totalAmount ?? 0) - (materialsCredits._sum.totalAmount ?? 0),
+    );
     const productionExpensesAmt = productionExpenses._sum.amount ?? 0;
     const breedingTotalCost = batchCosts._sum.totalCost ?? 0;
     const breedingExpensesAmt = breedingExpenses._sum.amount ?? 0;
@@ -257,8 +285,15 @@ export class DashboardService {
       select: { expenseDate: true, amount: true },
     });
     const purchases = await this.prisma.purchaseInvoice.findMany({
-      where: { invoiceDate: { gte: start } },
-      select: { invoiceDate: true, totalAmount: true },
+      // receptionDate = date d'entree stock effective. deletedAt=null
+      // exclut les receptions annulees, sinon double-comptage.
+      where: { receptionDate: { gte: start }, deletedAt: null },
+      select: { receptionDate: true, totalAmount: true },
+    });
+    // Avoirs fournisseurs : a deduire des couts du jour ou ils sont emis.
+    const credits = await this.prisma.supplierCreditNote.findMany({
+      where: { creditDate: { gte: start }, deletedAt: null },
+      select: { creditDate: true, totalAmount: true },
     });
 
     const buckets = new Map<
@@ -287,9 +322,14 @@ export class DashboardService {
       if (b) b.expenses += e.amount;
     });
     purchases.forEach((p) => {
-      const key = fmtDay(p.invoiceDate);
+      const key = fmtDay(p.receptionDate);
       const b = buckets.get(key);
       if (b) b.costs += p.totalAmount;
+    });
+    credits.forEach((c) => {
+      const key = fmtDay(c.creditDate);
+      const b = buckets.get(key);
+      if (b) b.costs = Math.max(0, b.costs - c.totalAmount);
     });
 
     const result = Array.from(buckets.values()).map((b) => ({
@@ -435,7 +475,12 @@ export class DashboardService {
   // ========================================================================
   async customerReceivables() {
     const unpaidInvoices = await this.prisma.saleInvoice.findMany({
-      where: { paymentStatus: { in: ['UNPAID', 'PARTIALLY_PAID'] }, totalAmount: { gt: 0 } },
+      where: {
+        paymentStatus: { in: ['UNPAID', 'PARTIALLY_PAID'] },
+        totalAmount: { gt: 0 },
+        amountRemaining: { gt: 0 },
+        deletedAt: null,
+      },
       include: { customer: { select: { id: true, name: true } } },
       orderBy: { invoiceDate: 'asc' },
     });
@@ -495,6 +540,9 @@ export class DashboardService {
     const unpaidInvoices = await this.prisma.purchaseInvoice.findMany({
       where: {
         paymentStatus: { in: [PaymentStatus.UNPAID, PaymentStatus.PARTIALLY_PAID] },
+        // amountRemaining > 0 strict : les receptions a credit excedentaire
+        // (avoir > reste) ont amountRemaining < 0 et ne sont PAS des dettes.
+        amountRemaining: { gt: 0 },
         deletedAt: null,
       },
       include: { supplier: { select: { id: true, name: true } } },
@@ -573,15 +621,23 @@ export class DashboardService {
         supplier: { select: { id: true, name: true } },
         purchaseInvoices: {
           where: { deletedAt: null },
-          select: { totalAmount: true },
+          select: {
+            totalAmount: true,
+            // Avoirs actifs pour calcul net : la marchandise retournee
+            // ne compte plus comme "deja receptionnee".
+            creditNotes: {
+              where: { deletedAt: null },
+              select: { totalAmount: true },
+            },
+          },
         },
       },
       orderBy: { expectedDate: 'asc' },
     });
 
     let totalEstimated = 0;
-    let totalReceived = 0;
-    let totalEngagedDebt = 0; // estimatif - receptionne (jamais < 0)
+    let totalReceived = 0; // net (deduction faite des avoirs)
+    let totalEngagedDebt = 0; // estimatif - receptionne net (jamais < 0)
     const bySupplierMap = new Map<
       string,
       {
@@ -605,7 +661,10 @@ export class DashboardService {
     }> = [];
 
     for (const order of activeOrders) {
-      const received = order.purchaseInvoices.reduce((s, i) => s + i.totalAmount, 0);
+      const received = order.purchaseInvoices.reduce((s, inv) => {
+        const credited = inv.creditNotes.reduce((cs, c) => cs + c.totalAmount, 0);
+        return s + (inv.totalAmount - credited);
+      }, 0);
       const engaged = Math.max(0, order.totalAmount - received);
       totalEstimated += order.totalAmount;
       totalReceived += received;

@@ -370,10 +370,19 @@ export class ReportsService {
   async payablesAging() {
     const today = new Date();
 
+    // Pour la brique "engagement", on prend les receptions ACTIVES (sans
+    // avoirs) en net pour ne pas double-compter une marchandise deja
+    // retournee. La net = totalAmount - sum(creditNote.totalAmount) sur
+    // cette reception.
     const [unpaidReceptions, engagedOrders] = await Promise.all([
       this.prisma.purchaseInvoice.findMany({
         where: {
+          // amountRemaining > 0 strict (les receptions a credit excedentaire
+          // — amountRemaining < 0 — ne sont pas des dettes, et celles a
+          // 0 ne le sont plus). On filtre par statut + signe pour etre
+          // robuste meme si paymentStatus n'a pas ete recalcule.
           paymentStatus: { in: ['UNPAID', 'PARTIALLY_PAID'] },
+          amountRemaining: { gt: 0 },
           deletedAt: null,
         },
         include: { supplier: { select: { id: true, name: true, phone: true } } },
@@ -385,7 +394,14 @@ export class ReportsService {
           supplier: { select: { id: true, name: true, phone: true } },
           purchaseInvoices: {
             where: { deletedAt: null },
-            select: { totalAmount: true },
+            select: {
+              totalAmount: true,
+              // Avoirs actifs sur chacune des receptions pour calcul net
+              creditNotes: {
+                where: { deletedAt: null },
+                select: { totalAmount: true },
+              },
+            },
           },
         },
         orderBy: { expectedDate: 'asc' },
@@ -407,8 +423,15 @@ export class ReportsService {
 
     const engagement = engagedOrders
       .map((order) => {
-        const received = order.purchaseInvoices.reduce((s, i) => s + i.totalAmount, 0);
-        const engaged = Math.max(0, order.totalAmount - received);
+        // Net receptionne = sum(totalAmount) - sum(avoirs).
+        // Si un avoir a annule une partie de la reception, l'engagement
+        // BC reste : la marchandise correspondant a l'avoir n'a pas
+        // veritablement ete livree.
+        const netReceived = order.purchaseInvoices.reduce((s, inv) => {
+          const credited = inv.creditNotes.reduce((cs, c) => cs + c.totalAmount, 0);
+          return s + (inv.totalAmount - credited);
+        }, 0);
+        const engaged = Math.max(0, order.totalAmount - netReceived);
         return { order, engaged };
       })
       .filter(({ engaged }) => engaged > 0)
@@ -532,7 +555,13 @@ export class ReportsService {
         deletedAt: null,
         ...(from || to ? { receptionDate: dateFilter } : {}),
       },
-      include: { supplier: { select: { id: true, name: true } } },
+      include: {
+        supplier: { select: { id: true, name: true } },
+        creditNotes: {
+          where: { deletedAt: null },
+          select: { totalAmount: true },
+        },
+      },
     });
 
     const map = new Map<
@@ -542,30 +571,41 @@ export class ReportsService {
         supplierName: string;
         receptionCount: number;
         totalReceived: number;
+        totalCredited: number;
+        netReceived: number;
         totalPaid: number;
         totalRemaining: number;
       }
     >();
     for (const r of receptions) {
       const k = r.supplierId;
+      const credited = r.creditNotes.reduce((s, c) => s + c.totalAmount, 0);
+      // amountRemaining peut etre negatif (credit excedentaire). On ne le
+      // compte que s'il est positif comme "reste a payer", sinon 0 (le
+      // credit fournisseur est traque via totalCredited).
+      const remainingPositive = Math.max(0, r.amountRemaining);
       const existing = map.get(k);
       if (existing) {
         existing.receptionCount++;
         existing.totalReceived += r.totalAmount;
+        existing.totalCredited += credited;
+        existing.netReceived += r.totalAmount - credited;
         existing.totalPaid += r.amountPaid;
-        existing.totalRemaining += r.amountRemaining;
+        existing.totalRemaining += remainingPositive;
       } else {
         map.set(k, {
           supplierId: k,
           supplierName: r.supplier.name,
           receptionCount: 1,
           totalReceived: r.totalAmount,
+          totalCredited: credited,
+          netReceived: r.totalAmount - credited,
           totalPaid: r.amountPaid,
-          totalRemaining: r.amountRemaining,
+          totalRemaining: remainingPositive,
         });
       }
     }
-    return Array.from(map.values()).sort((a, b) => b.totalReceived - a.totalReceived);
+    return Array.from(map.values()).sort((a, b) => b.netReceived - a.netReceived);
   }
 
   // ========================================================================
