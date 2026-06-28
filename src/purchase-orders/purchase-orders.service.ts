@@ -77,9 +77,14 @@ export class PurchaseOrdersService {
       include: { items: true },
     });
     if (!order) return;
+    // Statuts terminaux : on ne bascule jamais hors de ces etats par
+    // recalcul automatique. Sinon le rollback d'une reception sur un BC
+    // EXPIRED le retrograde en VALIDATED — incoherent (un BC expire reste
+    // expire meme si on annule une de ses receptions).
     if (
       order.status === PurchaseOrderStatus.CANCELLED ||
-      order.status === PurchaseOrderStatus.CLOSED
+      order.status === PurchaseOrderStatus.CLOSED ||
+      order.status === PurchaseOrderStatus.EXPIRED
     ) {
       return;
     }
@@ -205,12 +210,35 @@ export class PurchaseOrdersService {
     const order = await this.prisma.purchaseOrder.findUnique({
       where: { id },
       include: {
-        items: true,
+        items: {
+          include: {
+            rawMaterial: { select: { id: true, code: true, name: true, unit: true } },
+          },
+        },
         supplier: true,
         createdBy: { select: { id: true, fullName: true, email: true } },
         purchaseInvoices: {
           where: { deletedAt: null },
-          select: { id: true, reference: true, totalAmount: true, paymentStatus: true },
+          orderBy: { receptionDate: 'desc' },
+          include: {
+            items: {
+              include: {
+                rawMaterial: { select: { id: true, code: true, name: true, unit: true } },
+              },
+            },
+            payments: {
+              orderBy: { paymentDate: 'desc' },
+              include: {
+                account: { select: { id: true, name: true, type: true } },
+                createdBy: { select: { id: true, fullName: true } },
+              },
+            },
+            rawMaterialLots: {
+              include: {
+                rawMaterial: { select: { id: true, code: true, name: true } },
+              },
+            },
+          },
         },
       },
     });
@@ -218,6 +246,63 @@ export class PurchaseOrdersService {
       throw new NotFoundException(`Bon de commande ${id} introuvable`);
     }
     return order;
+  }
+
+  /**
+   * Calcule la synthese financiere d'un BC : dette estimee a la validation,
+   * dette reelle generee par les receptions, encaisse, restant a payer.
+   *
+   * Distinction importante :
+   *  - `estimatedTotalAmount` : ce que vaut le BC a sa validation (engagement
+   *    pris envers le fournisseur — somme qty * prix unitaire estimatif des
+   *    lignes).
+   *  - `receivedAmount` : ce qui a effectivement ete receptionne via les
+   *    factures fournisseur (somme PurchaseInvoice.totalAmount actives).
+   *  - `paidAmount` : ce qui a deja ete encaisse au fournisseur (somme
+   *    SupplierPayment.amount via les factures actives).
+   *  - `remainingToReceive` = estime - receptionne (peut etre negatif si la
+   *    facture finale est plus elevee que l'estimatif — l'utilisateur l'aura
+   *    confirme a la reception).
+   *  - `remainingToPay` = receptionne - paye.
+   *  - `unbilledEstimate` = estime - receptionne (positif uniquement) =
+   *    portion non encore facturee de la dette engagee.
+   */
+  async getPaymentSummary(id: string) {
+    const order = await this.prisma.purchaseOrder.findUnique({
+      where: { id },
+      select: {
+        id: true,
+        status: true,
+        totalAmount: true,
+        purchaseInvoices: {
+          where: { deletedAt: null },
+          select: {
+            totalAmount: true,
+            amountPaid: true,
+            amountRemaining: true,
+          },
+        },
+      },
+    });
+    if (!order) throw new NotFoundException(`Bon de commande ${id} introuvable`);
+
+    const estimatedTotalAmount = order.totalAmount;
+    const receivedAmount = order.purchaseInvoices.reduce((s, i) => s + i.totalAmount, 0);
+    const paidAmount = order.purchaseInvoices.reduce((s, i) => s + i.amountPaid, 0);
+    const remainingToPay = order.purchaseInvoices.reduce(
+      (s, i) => s + i.amountRemaining,
+      0,
+    );
+    const unbilledEstimate = Math.max(0, estimatedTotalAmount - receivedAmount);
+
+    return {
+      estimatedTotalAmount,
+      receivedAmount,
+      paidAmount,
+      remainingToPay,
+      unbilledEstimate,
+      receptionCount: order.purchaseInvoices.length,
+    };
   }
 
   async update(id: string, dto: UpdatePurchaseOrderDto) {
@@ -266,15 +351,35 @@ export class PurchaseOrdersService {
     });
   }
 
+  /**
+   * Validation d'un BC.
+   *
+   * Cette etape n'est plus un simple "feu vert administratif" :
+   *  - Elle EXIGE une date de livraison attendue (expectedDate) — c'est elle
+   *    qui justifie la dette engagee envers le fournisseur.
+   *  - Elle stamp `validatedAt` (utile pour calcul d'expiration auto).
+   *  - Comptablement, c'est le moment ou la dette ESTIMATIVE nait : le total
+   *    estimatif du BC devient une dette engagee, visible dans les rapports.
+   *
+   * La dette definitive sera affinee a chaque reception (PurchaseInvoice).
+   */
   async validate(id: string) {
     const order = await this.findOne(id);
     if (order.status !== PurchaseOrderStatus.DRAFT) {
       throw new BadRequestException('Seuls les bons de commande DRAFT peuvent etre valides');
     }
+    if (!order.expectedDate) {
+      throw new BadRequestException(
+        "Date de livraison attendue requise pour valider le BC. Modifiez le BC pour la renseigner.",
+      );
+    }
     return this.prisma.purchaseOrder.update({
       where: { id },
-      data: { status: PurchaseOrderStatus.VALIDATED },
-      include: { items: true },
+      data: {
+        status: PurchaseOrderStatus.VALIDATED,
+        validatedAt: new Date(),
+      },
+      include: { items: true, supplier: { select: { id: true, name: true } } },
     });
   }
 
@@ -289,7 +394,45 @@ export class PurchaseOrdersService {
 
     return this.prisma.purchaseOrder.update({
       where: { id },
-      data: { status: PurchaseOrderStatus.DRAFT },
+      data: {
+        status: PurchaseOrderStatus.DRAFT,
+        validatedAt: null,
+      },
+      include: { items: true, supplier: { select: { id: true, name: true } } },
+    });
+  }
+
+  /**
+   * Bascule un BC en statut EXPIRED.
+   *
+   * Cas d'usage : BC valide depuis longtemps qui ne sera jamais receptionne
+   * (fournisseur defaillant, commande oubliee, etc.). On retire la dette
+   * estimative du portefeuille actif sans le supprimer (audit conserve).
+   *
+   * Seuls les statuts VALIDATED ou PARTIALLY_DELIVERED peuvent expirer.
+   * Si des receptions existent (PARTIALLY_DELIVERED), l'expiration solde
+   * les lignes restantes (la dette definitive reste la somme des receptions
+   * deja faites).
+   */
+  async expire(id: string, reason?: string) {
+    const order = await this.findOne(id);
+    if (
+      order.status !== PurchaseOrderStatus.VALIDATED &&
+      order.status !== PurchaseOrderStatus.PARTIALLY_DELIVERED
+    ) {
+      throw new BadRequestException(
+        `Seuls les BC valides ou partiellement livres peuvent expirer (statut actuel : ${order.status})`,
+      );
+    }
+    const cancelReason = reason?.trim()
+      ? `Expire : ${reason.trim()}`
+      : 'BC expire (aucune reception attendue)';
+    return this.prisma.purchaseOrder.update({
+      where: { id },
+      data: {
+        status: PurchaseOrderStatus.EXPIRED,
+        cancelReason,
+      },
       include: { items: true, supplier: { select: { id: true, name: true } } },
     });
   }
@@ -327,7 +470,8 @@ export class PurchaseOrdersService {
     if (
       order.status === PurchaseOrderStatus.DELIVERED ||
       order.status === PurchaseOrderStatus.CLOSED ||
-      order.status === PurchaseOrderStatus.CANCELLED
+      order.status === PurchaseOrderStatus.CANCELLED ||
+      order.status === PurchaseOrderStatus.EXPIRED
     ) {
       throw new BadRequestException(`Impossible d'annuler un BC en statut ${order.status}`);
     }

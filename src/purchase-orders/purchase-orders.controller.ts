@@ -9,8 +9,9 @@ import {
   Post,
   Query,
 } from '@nestjs/common';
-import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
+import { ApiBearerAuth, ApiOperation, ApiProperty, ApiTags } from '@nestjs/swagger';
 import { UserRole } from '@prisma/client';
+import { IsOptional, IsString, MaxLength } from 'class-validator';
 import { PurchaseOrdersService } from './purchase-orders.service';
 import { CreatePurchaseOrderDto } from './dto/create-purchase-order.dto';
 import { UpdatePurchaseOrderDto } from './dto/update-purchase-order.dto';
@@ -18,6 +19,17 @@ import { CancelPurchaseOrderDto } from './dto/cancel-purchase-order.dto';
 import { QueryPurchaseOrdersDto } from './dto/query-purchase-orders.dto';
 import { Roles } from '../common/decorators/roles.decorator';
 import { CurrentUser, AuthenticatedUser } from '../common/decorators/current-user.decorator';
+
+class ExpirePurchaseOrderDto {
+  @ApiProperty({
+    required: false,
+    description: "Motif de l'expiration (optionnel, max 500 caracteres)",
+  })
+  @IsOptional()
+  @IsString()
+  @MaxLength(500)
+  reason?: string;
+}
 
 @ApiTags('Purchase Orders')
 @ApiBearerAuth('JWT-auth')
@@ -41,9 +53,20 @@ export class PurchaseOrdersController {
 
   @Get(':id')
   @Roles(UserRole.DIRECTOR, UserRole.PRODUCTION_MANAGER, UserRole.OPERATOR)
-  @ApiOperation({ summary: "Détail d'un bon de commande (commandé vs livré)" })
+  @ApiOperation({ summary: "Détail d'un bon de commande (commandé vs livré, receptions, paiements)" })
   findOne(@Param('id', new ParseUUIDPipe()) id: string) {
     return this.service.findOne(id);
+  }
+
+  @Get(':id/payment-summary')
+  @Roles(UserRole.DIRECTOR, UserRole.PRODUCTION_MANAGER, UserRole.OPERATOR)
+  @ApiOperation({
+    summary: 'Synthese financiere du BC',
+    description:
+      'Retourne { estimatedTotalAmount, receivedAmount, paidAmount, remainingToPay, unbilledEstimate, receptionCount }.',
+  })
+  paymentSummary(@Param('id', new ParseUUIDPipe()) id: string) {
+    return this.service.getPaymentSummary(id);
   }
 
   @Patch(':id')
@@ -85,6 +108,21 @@ export class PurchaseOrdersController {
     @Body() dto: CancelPurchaseOrderDto,
   ) {
     return this.service.cancel(id, dto);
+  }
+
+  @Patch(':id/expire')
+  @Roles(UserRole.DIRECTOR, UserRole.PRODUCTION_MANAGER)
+  @ApiOperation({
+    summary: 'Marquer un BC valide comme EXPIRED (aucune reception attendue)',
+    description:
+      'Cas d\'usage : BC reste longtemps en VALIDATED sans reception, fournisseur defaillant. ' +
+      'Retire la dette estimative du portefeuille actif. Statut terminal — non reversible.',
+  })
+  expire(
+    @Param('id', new ParseUUIDPipe()) id: string,
+    @Body() dto: ExpirePurchaseOrderDto,
+  ) {
+    return this.service.expire(id, dto.reason);
   }
 
   @Delete(':id')

@@ -15,6 +15,7 @@ import { PurchaseInvoicesService } from './purchase-invoices.service';
 import { CreatePurchaseInvoiceDto } from './dto/create-purchase-invoice.dto';
 import { UpdatePurchaseInvoiceDto } from './dto/update-purchase-invoice.dto';
 import { QueryPurchaseInvoicesDto } from './dto/query-purchase-invoices.dto';
+import { QuickPurchaseDto } from './dto/quick-purchase.dto';
 import { Roles } from '../common/decorators/roles.decorator';
 import { CurrentUser, AuthenticatedUser } from '../common/decorators/current-user.decorator';
 
@@ -35,15 +36,31 @@ export class PurchaseInvoicesController {
   @Post()
   @Roles(UserRole.DIRECTOR, UserRole.PRODUCTION_MANAGER, UserRole.OPERATOR)
   @ApiOperation({
-    summary: "Créer une facture d'achat avec ses lignes",
+    summary: "Enregistrer une reception (facture d'achat) liee ou non a un BC",
     description:
-      "À la création, les quantités livrées du bon de commande lié sont automatiquement mises à jour.",
+      "A la creation : les lots stock sont generes, le PMP est recalcule, et les quantites livrees du BC lie (si fourni) sont automatiquement incrementees.",
   })
   create(
     @Body() dto: CreatePurchaseInvoiceDto,
     @CurrentUser() user: AuthenticatedUser,
   ) {
     return this.service.create(dto, user.id);
+  }
+
+  @Post('quick-purchase')
+  @Roles(UserRole.DIRECTOR, UserRole.PRODUCTION_MANAGER)
+  @ApiOperation({
+    summary: 'Achat comptoir : creer + valider un BC, le receptionner et l\'encaisser',
+    description:
+      'Mode POS achats : tout se fait en une transaction. Le BC est cree directement en statut VALIDATED, ' +
+      'la facture immediatement receptionnee (lots stock crees, PMP recalcule), et si paidAmount > 0 ' +
+      'un SupplierPayment + ecriture tresorerie sont enregistres atomiquement. Reserve aux achats au comptoir.',
+  })
+  quickPurchase(
+    @Body() dto: QuickPurchaseDto,
+    @CurrentUser() user: AuthenticatedUser,
+  ) {
+    return this.service.quickPurchase(dto, user.id);
   }
 
   @Get()

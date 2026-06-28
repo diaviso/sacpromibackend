@@ -49,6 +49,7 @@ enum PurchaseOrderStatus {
   PARTIALLY_DELIVERED
   DELIVERED
   CLOSED
+  EXPIRED
   CANCELLED
 }
 
@@ -463,10 +464,20 @@ model PurchaseOrder {
   reference    String              @unique
   supplierId   String
   orderDate    DateTime
+  /// Date attendue de livraison. Devient OBLIGATOIRE au moment de la
+  /// validation du BC — c'est la date de reference pour calculer si le BC
+  /// est en retard ou expire.
   expectedDate DateTime?
   status       PurchaseOrderStatus @default(DRAFT)
   note         String?             @db.Text
+  /// Total estimatif (somme qty * prix unitaire estime des lignes). C'est la
+  /// dette estimative engagee a la validation du BC, AVANT toute reception.
+  /// Tant qu'il y a des receptions, la dette reelle (PurchaseInvoice.totalAmount
+  /// cumule) prime — mais on garde ce champ pour comparer estimatif/reel.
   totalAmount  Int                 @default(0)
+  /// Marque temporelle de la validation. Sert au calcul d'expiration auto
+  /// (BC valide depuis longtemps sans reception = candidat a EXPIRED).
+  validatedAt  DateTime?
   cancelReason String?             @db.Text
   createdById  String
   createdAt    DateTime            @default(now())
