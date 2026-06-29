@@ -1,6 +1,7 @@
 import { Module } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
 import { APP_FILTER, APP_GUARD } from '@nestjs/core';
+import { envValidationSchema } from './config/env.validation';
 import { HttpExceptionFilter } from './common/filters/http-exception.filter';
 import { PrismaModule } from './prisma/prisma.module';
 import { CommonModule } from './common/common.module';
@@ -46,6 +47,11 @@ import { RolesGuard } from './common/guards/roles.guard';
     ConfigModule.forRoot({
       isGlobal: true,
       envFilePath: '.env',
+      validationSchema: envValidationSchema,
+      validationOptions: {
+        // Affiche TOUTES les erreurs de config d'un coup, pas seulement la première.
+        abortEarly: false,
+      },
     }),
     PrismaModule,
     CommonModule,

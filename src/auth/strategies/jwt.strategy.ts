@@ -47,10 +47,19 @@ export class JwtStrategy extends PassportStrategy(Strategy, 'jwt') {
     config: ConfigService,
     private readonly prisma: PrismaService,
   ) {
+    // Le secret est garanti présent par la validation d'environnement
+    // (env.validation.ts) qui empêche le démarrage s'il est absent. Plus de
+    // fallback en dur : un secret par défaut public permettrait de forger des JWT.
+    const accessSecret = config.get<string>('JWT_ACCESS_SECRET');
+    if (!accessSecret) {
+      throw new Error(
+        'JWT_ACCESS_SECRET est requis (voir config/env.validation.ts).',
+      );
+    }
     super({
       jwtFromRequest: extractJwtFromHeaderOrQuery,
       ignoreExpiration: false,
-      secretOrKey: config.get<string>('JWT_ACCESS_SECRET') ?? 'fallback-secret',
+      secretOrKey: accessSecret,
       passReqToCallback: true,
     });
   }

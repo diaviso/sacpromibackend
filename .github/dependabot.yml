@@ -1,0 +1,18 @@
+version: 2
+# Audit LOT 7 : veille automatique des dépendances (CVE + mises à jour).
+updates:
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    groups:
+      # Regroupe les mises à jour mineures/patch pour limiter le bruit.
+      minor-and-patch:
+        update-types:
+          - minor
+          - patch
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: monthly
