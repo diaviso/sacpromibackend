@@ -74,11 +74,17 @@ export class HttpExceptionFilter implements ExceptionFilter {
       this.logger.warn(`${request.method} ${request.url} → ${status} : ${JSON.stringify(message)}`);
     }
 
+    // Anti-fuite d'information (audit LOT 3) : pour les erreurs serveur (≥ 500),
+    // on ne renvoie JAMAIS le message brut de l'exception au client (il peut
+    // contenir des chemins, des détails internes, des fragments de requête).
+    // Le détail reste uniquement dans les logs serveur (ci-dessus).
+    const clientMessage = status >= 500 ? 'Erreur interne du serveur' : message;
+
     response.status(status).json({
       success: false,
       statusCode: status,
       error,
-      message,
+      message: clientMessage,
       timestamp: new Date().toISOString(),
       path: request.url,
     });

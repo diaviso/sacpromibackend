@@ -52,12 +52,14 @@ export class UsersService {
       },
     });
 
-    // Email de bienvenue avec mot de passe temporaire
+    // Email de bienvenue SANS mot de passe (audit LOT 3) : l'email est un canal
+    // non chiffré et persistant. Le mot de passe initial est communiqué par le
+    // directeur de façon sécurisée (hors-bande), ou l'utilisateur le définit via
+    // « Mot de passe oublié ». On ne transmet donc jamais le mot de passe ici.
     void this.sendWelcomeEmailSafely({
       to: user.email,
       fullName: user.fullName,
       role: ROLE_LABELS[user.role] ?? user.role,
-      tempPassword: dto.password,
     });
 
     return this.stripPassword(user);

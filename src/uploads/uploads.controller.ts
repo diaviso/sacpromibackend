@@ -115,22 +115,28 @@ export class UploadsController {
   @AnyAuthenticated()
   @ApiOperation({
     summary: 'Métadonnées d\'un upload (taille, nom, mime, qui a uploadé)',
+    description:
+      "Les justificatifs sensibles (scans factures, reçus, contrats) ne sont accessibles qu'au DIRECTOR ou à l'uploadeur.",
   })
-  findOne(@Param('id', new ParseUUIDPipe()) id: string) {
-    return this.service.findOne(id);
+  findOne(
+    @Param('id', new ParseUUIDPipe()) id: string,
+    @CurrentUser() user: AuthenticatedUser,
+  ) {
+    return this.service.findOne(id, user);
   }
 
   @Get(':id/download')
   @AnyAuthenticated()
   @ApiOperation({
     summary: 'Télécharger / pré-visualiser un fichier',
-    description: 'Renvoie le binaire avec le bon Content-Type. Pour les images et PDF, le navigateur affiche inline.',
+    description: 'Renvoie le binaire avec le bon Content-Type. Pour les images et PDF, le navigateur affiche inline. Contrôle d\'accès par catégorie (anti-IDOR).',
   })
   async download(
     @Param('id', new ParseUUIDPipe()) id: string,
+    @CurrentUser() user: AuthenticatedUser,
     @Res() res: Response,
   ) {
-    const { buffer, mimeType, originalName } = await this.service.download(id);
+    const { buffer, mimeType, originalName } = await this.service.download(id, user);
     // inline pour permettre l'aperçu navigateur (image, PDF) ;
     // le `filename` reste utilisé si le user clique "télécharger".
     const safeName = encodeURIComponent(originalName);

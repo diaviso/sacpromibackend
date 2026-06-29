@@ -1,15 +1,30 @@
 import {
   BadRequestException,
+  ForbiddenException,
   Inject,
   Injectable,
   Logger,
   NotFoundException,
 } from '@nestjs/common';
-import { UploadCategory } from '@prisma/client';
+import { UploadCategory, UserRole } from '@prisma/client';
 import * as crypto from 'crypto';
 import * as path from 'path';
 import { PrismaService } from '../prisma/prisma.service';
+import { AuthenticatedUser } from '../common/decorators/current-user.decorator';
 import { STORAGE_SERVICE, StorageService } from './storage.interface';
+
+// Catégories de justificatifs SENSIBLES (financiers/contractuels) : leur accès
+// est restreint au DIRECTOR ou à l'uploadeur. Les autres (images produit, logo,
+// pièces génériques) sont consultables par tout le personnel authentifié.
+// Corrige l'IDOR (audit LOT 3) : auparavant tout utilisateur authentifié
+// pouvait télécharger n'importe quel fichier en devinant son UUID.
+const SENSITIVE_UPLOAD_CATEGORIES = new Set<UploadCategory>([
+  UploadCategory.PURCHASE_INVOICE_SCAN,
+  UploadCategory.EXPENSE_RECEIPT,
+  UploadCategory.FIXED_ASSET_DOCUMENT,
+  UploadCategory.LOAN_CONTRACT,
+  UploadCategory.CAPITAL_DOCUMENT,
+]);
 
 // Whitelist explicite : on n'accepte que les formats utiles aux justificatifs
 // (et qui sont sûrs à servir/preview dans un navigateur).
@@ -113,7 +128,8 @@ export class UploadsService {
     }
   }
 
-  async findOne(id: string) {
+  /** Récupère la ligne Upload sans contrôle d'accès (usage interne). */
+  private async getRawUpload(id: string) {
     const upload = await this.prisma.upload.findUnique({
       where: { id },
       include: { uploadedBy: { select: { id: true, fullName: true } } },
@@ -124,9 +140,31 @@ export class UploadsService {
     return upload;
   }
 
+  /** Contrôle d'accès au niveau ressource (anti-IDOR). */
+  private assertCanView(
+    upload: { category: UploadCategory; uploadedById: string },
+    user: AuthenticatedUser,
+  ) {
+    if (!SENSITIVE_UPLOAD_CATEGORIES.has(upload.category)) return; // public au personnel
+    if (user.role === UserRole.DIRECTOR) return;
+    if (upload.uploadedById === user.id) return;
+    throw new ForbiddenException(
+      "Vous n'êtes pas autorisé à accéder à ce justificatif.",
+    );
+  }
+
+  async findOne(id: string, user: AuthenticatedUser) {
+    const upload = await this.getRawUpload(id);
+    this.assertCanView(upload, user);
+    return upload;
+  }
+
   /** Renvoie le binaire pour servir au client. */
-  async download(id: string): Promise<{ buffer: Buffer; mimeType: string; originalName: string }> {
-    const upload = await this.findOne(id);
+  async download(
+    id: string,
+    user: AuthenticatedUser,
+  ): Promise<{ buffer: Buffer; mimeType: string; originalName: string }> {
+    const upload = await this.findOne(id, user);
     const buffer = await this.storage.read(upload.storageKey);
     if (!buffer) {
       throw new NotFoundException("Fichier disparu du disque (corruption ou suppression manuelle)");
@@ -139,7 +177,7 @@ export class UploadsService {
    * On garde la ligne en BDD pour l'audit (qui a uploadé quoi quand).
    */
   async remove(id: string) {
-    const upload = await this.findOne(id);
+    const upload = await this.getRawUpload(id);
     await this.prisma.upload.update({
       where: { id },
       data: { deletedAt: new Date() },

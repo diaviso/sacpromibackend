@@ -6,6 +6,7 @@ import { APP_GUARD } from '@nestjs/core';
 import { AuthService } from './auth.service';
 import { AuthController } from './auth.controller';
 import { JwtStrategy } from './strategies/jwt.strategy';
+import { TokenCleanupCron } from './token-cleanup.cron';
 
 @Module({
   imports: [
@@ -34,6 +35,7 @@ import { JwtStrategy } from './strategies/jwt.strategy';
   providers: [
     AuthService,
     JwtStrategy,
+    TokenCleanupCron,
     { provide: APP_GUARD, useClass: ThrottlerGuard },
   ],
   exports: [AuthService],

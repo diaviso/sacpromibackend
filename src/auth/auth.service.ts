@@ -1,6 +1,7 @@
 import {
   BadRequestException,
   ConflictException,
+  ForbiddenException,
   Injectable,
   Logger,
   UnauthorizedException,
@@ -84,6 +85,18 @@ export class AuthService {
     }
 
     const userCount = await this.prisma.user.count();
+
+    // Durcissement (audit LOT 3) : en production, l'inscription publique n'est
+    // autorisée que pour AMORCER le tout premier compte (le directeur). Une fois
+    // un compte créé, les utilisateurs suivants doivent être créés par le
+    // directeur via POST /users — on ferme ainsi l'auto-inscription anonyme.
+    const isProd = this.config.get<string>('NODE_ENV') === 'production';
+    if (isProd && userCount > 0) {
+      throw new ForbiddenException(
+        "L'inscription publique est désactivée. Contactez le directeur pour la création de votre compte.",
+      );
+    }
+
     const role: UserRole = userCount === 0 ? UserRole.DIRECTOR : UserRole.OPERATOR;
 
     const hashedPassword = await bcrypt.hash(dto.password, this.saltRounds);
@@ -311,8 +324,11 @@ export class AuthService {
         `Échec envoi email reset à ${user.email}`,
         (err as Error).stack,
       );
-      // En dev (jsonTransport ou erreur SMTP), on log le lien pour debug
-      this.logger.warn(`🔗 Lien de réinitialisation (debug) : ${resetUrl}`);
+      // En dev uniquement (jsonTransport ou erreur SMTP), on log le lien pour
+      // debug. JAMAIS en production : ce lien contient un token de reset valide.
+      if (this.config.get<string>('NODE_ENV') !== 'production') {
+        this.logger.warn(`🔗 Lien de réinitialisation (debug) : ${resetUrl}`);
+      }
     }
 
     return genericMessage;
