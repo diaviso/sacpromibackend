@@ -27,7 +27,21 @@ export class BackupService {
     );
 
     if (!fs.existsSync(scriptPath)) {
-      this.logger.error(`Script de sauvegarde introuvable : ${scriptPath}`);
+      this.logger.error(
+        `Script de sauvegarde introuvable : ${scriptPath}. ` +
+          "Vérifiez que le dossier 'scripts/' est bien inclus dans l'image.",
+      );
+      return;
+    }
+
+    // Audit LOT 7 : on vérifie que pg_dump est disponible AVANT de lancer le
+    // script, pour émettre un message clair et actionnable plutôt qu'un échec
+    // silencieux (l'ancienne image alpine ne contenait pas postgresql-client).
+    if (!isWindows && !(await this.isPgDumpAvailable())) {
+      this.logger.error(
+        "❌ pg_dump introuvable : sauvegarde impossible. Installez postgresql-client " +
+          '(déjà ajouté au Dockerfile) ou appuyez-vous sur les sauvegardes managées de votre hébergeur.',
+      );
       return;
     }
 
@@ -42,7 +56,16 @@ export class BackupService {
 
       this.logger.log('✅ Sauvegarde quotidienne terminée');
     } catch (err) {
-      this.logger.error('❌ Échec de la sauvegarde quotidienne', err);
+      this.logger.error('❌ Échec de la sauvegarde quotidienne', err as Error);
+    }
+  }
+
+  private async isPgDumpAvailable(): Promise<boolean> {
+    try {
+      await execAsync('pg_dump --version');
+      return true;
+    } catch {
+      return false;
     }
   }
 }

@@ -36,7 +36,10 @@ RUN npm run build \
 FROM node:22-alpine AS runtime
 WORKDIR /app
 
-RUN apk add --no-cache openssl libc6-compat tini su-exec \
+# Audit LOT 7 : on AJOUTE bash + postgresql-client (pg_dump) + wget, sans quoi
+# le cron de sauvegarde echouait silencieusement (image alpine = sh seul, pas
+# de pg_dump). wget sert au HEALTHCHECK ci-dessous.
+RUN apk add --no-cache openssl libc6-compat tini su-exec bash postgresql-client wget \
  && addgroup -S nodejs \
  && adduser -S nestjs -G nodejs \
  && mkdir -p /app/uploads /app/backups \
@@ -49,9 +52,16 @@ COPY --from=build --chown=nestjs:nodejs /app/node_modules ./node_modules
 COPY --from=build --chown=nestjs:nodejs /app/dist ./dist
 COPY --from=build --chown=nestjs:nodejs /app/prisma ./prisma
 COPY --from=build --chown=nestjs:nodejs /app/package.json ./package.json
+# Audit LOT 7 : les scripts (backup-db.sh) doivent etre presents dans l'image —
+# sinon le cron de sauvegarde ne trouvait pas le fichier et sortait en silence.
+COPY --from=build --chown=nestjs:nodejs /app/scripts ./scripts
 COPY --from=build --chown=root:root --chmod=755 /app/docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
 
 EXPOSE 3070
+
+# Healthcheck auto-suffisant (l'image n'est plus dependante de la plateforme).
+HEALTHCHECK --interval=30s --timeout=5s --start-period=40s --retries=3 \
+  CMD wget -q -O- "http://localhost:${PORT:-3070}/api/health" || exit 1
 
 # Tini comme init pour propager SIGTERM proprement (Railway l'envoie au déploiement)
 ENTRYPOINT ["/sbin/tini", "--", "/usr/local/bin/docker-entrypoint.sh"]

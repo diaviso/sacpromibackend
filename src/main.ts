@@ -1,5 +1,5 @@
 import { NestFactory } from '@nestjs/core';
-import { ValidationPipe, Logger } from '@nestjs/common';
+import { ValidationPipe, Logger, LogLevel } from '@nestjs/common';
 import { NestExpressApplication } from '@nestjs/platform-express';
 import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
 import { ConfigService } from '@nestjs/config';
@@ -10,8 +10,19 @@ import { TransformInterceptor } from './common/interceptors/transform.intercepto
 async function bootstrap() {
   process.env.TZ = process.env.TZ || 'Africa/Dakar';
 
+  // Niveaux de log (audit LOT 7) : verbeux en dev, restreints en prod pour
+  // limiter le bruit/coût. Surchargeable via LOG_LEVEL="log,error,warn".
+  const isProdEnv = process.env.NODE_ENV === 'production';
+  const logLevels: LogLevel[] = (
+    process.env.LOG_LEVEL
+      ? process.env.LOG_LEVEL.split(',').map((s) => s.trim())
+      : isProdEnv
+        ? ['log', 'error', 'warn']
+        : ['log', 'error', 'warn', 'debug', 'verbose']
+  ) as LogLevel[];
+
   const app = await NestFactory.create<NestExpressApplication>(AppModule, {
-    logger: ['log', 'error', 'warn', 'debug', 'verbose'],
+    logger: logLevels,
   });
 
   const config = app.get(ConfigService);
