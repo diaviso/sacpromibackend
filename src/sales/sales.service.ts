@@ -23,6 +23,7 @@ import { CustomerOrdersService } from '../customer-orders/customer-orders.servic
 import { TreasuryService } from '../treasury/treasury.service';
 import { CreateSaleDto } from './dto/create-sale.dto';
 import { CreateCreditNoteDto } from './dto/create-credit-note.dto';
+import { recomputeSaleInvoiceState } from './sale-invoice-state';
 import { paginate, PaginationDto } from '../common/dto/pagination.dto';
 
 @Injectable()
@@ -498,21 +499,10 @@ export class SalesService {
         });
       }
 
-      // Réduire le montant dû par le client (sur la facture originale)
-      const newRemaining = Math.max(0, original.amountRemaining - totalAmount);
-      const newAmountPaid = original.totalAmount - newRemaining;
-      let newStatus = original.paymentStatus;
-      if (newRemaining === 0) newStatus = PaymentStatus.PAID;
-      else if (newAmountPaid > 0) newStatus = PaymentStatus.PARTIALLY_PAID;
-
-      await tx.saleInvoice.update({
-        where: { id: saleInvoiceId },
-        data: {
-          amountPaid: newAmountPaid,
-          amountRemaining: newRemaining,
-          paymentStatus: newStatus,
-        },
-      });
+      // Réduire le montant dû par le client (audit C1) : recalcul depuis la
+      // source de vérité — l'avoir (facture enfant, montant négatif) est désormais
+      // pris en compte sans gonfler artificiellement `amountPaid`.
+      await recomputeSaleInvoiceState(tx, saleInvoiceId);
 
       return creditNote;
     });

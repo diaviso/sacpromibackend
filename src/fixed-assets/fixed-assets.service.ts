@@ -261,87 +261,117 @@ export class FixedAssetsService {
     userId: string,
   ) {
     const periodStart = new Date(year, month - 1, 1);
-
-    // Tous les actifs en service acquis avant la fin du mois cible
-    const assets = await this.prisma.fixedAsset.findMany({
-      where: {
-        status: FixedAssetStatus.IN_SERVICE,
-        acquisitionDate: { lt: new Date(year, month, 1) },
-      },
-      include: {
-        depreciations: {
-          orderBy: [{ periodYear: 'desc' }, { periodMonth: 'desc' }],
-          take: 1,
-        },
-      },
-    });
+    const label = periodStart.toISOString().slice(0, 7);
+    const lockKey = `depreciation-${year}-${String(month).padStart(2, '0')}`;
 
     const created: Array<{ id: string; assetReference: string; amount: number }> = [];
     const skipped: Array<{ id: string; reason: string }> = [];
 
-    for (const asset of assets) {
-      // Skip si déjà calculé pour ce mois
-      const already = await this.prisma.depreciationEntry.findUnique({
-        where: {
-          fixedAssetId_periodYear_periodMonth: {
-            fixedAssetId: asset.id,
-            periodYear: year,
-            periodMonth: month,
+    // Audit C3 : tout est exécuté DANS UNE TRANSACTION (atomicité : pas de série
+    // partielle) et protégé par un JobLock idempotent. Le verrou est créé dans
+    // la transaction → relâché en cas de rollback (réexécutable), persistant si
+    // commit. Une double exécution concurrente (cron + manuel, scaling) se
+    // sérialise sur la contrainte unique du verrou (P2002 → on sort proprement).
+    try {
+      await this.prisma.$transaction(async (tx) => {
+        await tx.jobLock.create({
+          data: { key: lockKey, executedBy: userId, note: 'Dotation mensuelle' },
+        });
+
+        const assets = await tx.fixedAsset.findMany({
+          where: {
+            status: FixedAssetStatus.IN_SERVICE,
+            acquisitionDate: { lt: new Date(year, month, 1) },
           },
-        },
+          include: {
+            depreciations: {
+              orderBy: [{ periodYear: 'desc' }, { periodMonth: 'desc' }],
+              take: 1,
+            },
+          },
+        });
+
+        for (const asset of assets) {
+          // Skip si déjà calculé pour ce mois (données partielles legacy).
+          const already = await tx.depreciationEntry.findUnique({
+            where: {
+              fixedAssetId_periodYear_periodMonth: {
+                fixedAssetId: asset.id,
+                periodYear: year,
+                periodMonth: month,
+              },
+            },
+          });
+          if (already) {
+            skipped.push({ id: asset.id, reason: 'already-computed' });
+            continue;
+          }
+
+          const lastEntry = asset.depreciations[0];
+          const accumulated = lastEntry?.accumulatedDepreciation ?? 0;
+          const netBookValue = lastEntry?.netBookValue ?? asset.acquisitionCost;
+
+          // Pas en dessous de la valeur résiduelle
+          const depreciableBase = Math.max(0, netBookValue - asset.salvageValue);
+          if (depreciableBase <= 0) {
+            skipped.push({ id: asset.id, reason: 'fully-depreciated' });
+            continue;
+          }
+
+          let amount: number;
+          if (asset.method === DepreciationMethod.STRAIGHT_LINE) {
+            // Linéaire : (cost - salvage) / lifeMonths
+            const monthly = Math.round(
+              (asset.acquisitionCost - asset.salvageValue) / asset.usefulLifeMonths,
+            );
+            amount = Math.min(monthly, depreciableBase);
+          } else {
+            // Dégressif : NBV * (rate / 12)
+            const monthlyRate = Number(asset.decliningRate) / 12;
+            amount = Math.min(Math.round(netBookValue * monthlyRate), depreciableBase);
+          }
+
+          if (amount <= 0) {
+            skipped.push({ id: asset.id, reason: 'no-depreciation' });
+            continue;
+          }
+
+          const entry = await tx.depreciationEntry.create({
+            data: {
+              fixedAssetId: asset.id,
+              periodYear: year,
+              periodMonth: month,
+              amount,
+              accumulatedDepreciation: accumulated + amount,
+              netBookValue: netBookValue - amount,
+              createdById: userId,
+            },
+          });
+          created.push({ id: entry.id, assetReference: asset.reference, amount });
+        }
       });
-      if (already) {
-        skipped.push({ id: asset.id, reason: 'already-computed' });
-        continue;
+    } catch (err) {
+      if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2002') {
+        this.logger.warn(
+          `⏭️  Dotation ${lockKey} déjà exécutée ou en cours — ignorée (idempotence).`,
+        );
+        return {
+          period: { year, month, label },
+          created: [],
+          skipped: [],
+          totalAmount: 0,
+          alreadyExecuted: true,
+        };
       }
-
-      const lastEntry = asset.depreciations[0];
-      const accumulated = lastEntry?.accumulatedDepreciation ?? 0;
-      const netBookValue = lastEntry?.netBookValue ?? asset.acquisitionCost;
-
-      // Pas en dessous de la valeur résiduelle
-      const depreciableBase = Math.max(0, netBookValue - asset.salvageValue);
-      if (depreciableBase <= 0) {
-        skipped.push({ id: asset.id, reason: 'fully-depreciated' });
-        continue;
-      }
-
-      let amount = 0;
-      if (asset.method === DepreciationMethod.STRAIGHT_LINE) {
-        // Linéaire : (cost - salvage) / lifeMonths
-        const monthly = Math.round((asset.acquisitionCost - asset.salvageValue) / asset.usefulLifeMonths);
-        amount = Math.min(monthly, depreciableBase);
-      } else {
-        // Dégressif : NBV * (rate / 12)
-        const monthlyRate = Number(asset.decliningRate) / 12;
-        amount = Math.min(Math.round(netBookValue * monthlyRate), depreciableBase);
-      }
-
-      if (amount <= 0) {
-        skipped.push({ id: asset.id, reason: 'no-depreciation' });
-        continue;
-      }
-
-      const entry = await this.prisma.depreciationEntry.create({
-        data: {
-          fixedAssetId: asset.id,
-          periodYear: year,
-          periodMonth: month,
-          amount,
-          accumulatedDepreciation: accumulated + amount,
-          netBookValue: netBookValue - amount,
-          createdById: userId,
-        },
-      });
-      created.push({ id: entry.id, assetReference: asset.reference, amount });
+      throw err;
     }
 
     this.logger.log(
-      `Dotations ${year}-${String(month).padStart(2, '0')} : ${created.length} créées, ${skipped.length} ignorées`,
+      `Dotations ${label} : ${created.length} créées, ${skipped.length} ignorées`,
     );
 
     return {
-      period: { year, month, label: periodStart.toISOString().slice(0, 7) },
+      period: { year, month, label },
       created,
       skipped,
       totalAmount: created.reduce((s, c) => s + c.amount, 0),

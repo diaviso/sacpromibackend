@@ -17,6 +17,51 @@ export class SupplierPaymentsService {
     private readonly treasury: TreasuryService,
   ) {}
 
+  /**
+   * Recalcule l'état de paiement d'une facture d'achat à partir de la SOURCE DE
+   * VÉRITÉ (audit C1) :
+   *   amountPaid       = Σ paiements
+   *   amountRemaining  = totalAmount − Σ avoirs actifs − amountPaid
+   *
+   * Auparavant `create`/`remove` faisaient `totalAmount − amountPaid`, ce qui
+   * EFFAÇAIT la réduction de dette opérée par les avoirs (dette fantôme).
+   * `amountRemaining` peut devenir négatif (= crédit fournisseur), comportement
+   * documenté dans le schéma.
+   */
+  private async recomputeInvoiceState(
+    tx: Prisma.TransactionClient,
+    invoiceId: string,
+  ) {
+    const invoice = await tx.purchaseInvoice.findUnique({
+      where: { id: invoiceId },
+      select: { totalAmount: true },
+    });
+    if (!invoice) return;
+    const [paidAgg, creditAgg] = await Promise.all([
+      tx.supplierPayment.aggregate({
+        where: { purchaseInvoiceId: invoiceId },
+        _sum: { amount: true },
+      }),
+      tx.supplierCreditNote.aggregate({
+        where: { purchaseInvoiceId: invoiceId, deletedAt: null },
+        _sum: { totalAmount: true },
+      }),
+    ]);
+    const amountPaid = paidAgg._sum.amount ?? 0;
+    const totalCredits = creditAgg._sum.totalAmount ?? 0;
+    const amountRemaining = invoice.totalAmount - totalCredits - amountPaid;
+    const paymentStatus: PaymentStatus =
+      amountRemaining <= 0
+        ? PaymentStatus.PAID
+        : amountPaid > 0
+          ? PaymentStatus.PARTIALLY_PAID
+          : PaymentStatus.UNPAID;
+    await tx.purchaseInvoice.update({
+      where: { id: invoiceId },
+      data: { amountPaid, amountRemaining, paymentStatus },
+    });
+  }
+
   async create(dto: CreateSupplierPaymentDto, userId: string) {
     return this.prisma.$transaction(async (tx) => {
       const invoice = await tx.purchaseInvoice.findUnique({
@@ -70,23 +115,8 @@ export class SupplierPaymentsService {
         });
       }
 
-      const newAmountPaid = invoice.amountPaid + dto.amount;
-      const newAmountRemaining = invoice.totalAmount - newAmountPaid;
-      const newStatus: PaymentStatus =
-        newAmountRemaining <= 0
-          ? PaymentStatus.PAID
-          : newAmountPaid > 0
-            ? PaymentStatus.PARTIALLY_PAID
-            : PaymentStatus.UNPAID;
-
-      await tx.purchaseInvoice.update({
-        where: { id: invoice.id },
-        data: {
-          amountPaid: newAmountPaid,
-          amountRemaining: Math.max(0, newAmountRemaining),
-          paymentStatus: newStatus,
-        },
-      });
+      // Recalcul depuis la source de vérité (tient compte des avoirs).
+      await this.recomputeInvoiceState(tx, invoice.id);
 
       return payment;
     });
@@ -185,28 +215,15 @@ export class SupplierPaymentsService {
     if (!payment) throw new NotFoundException('Paiement introuvable');
 
     return this.prisma.$transaction(async (tx) => {
-      const invoice = payment.purchaseInvoice;
-      const newAmountPaid = Math.max(0, invoice.amountPaid - payment.amount);
-      const newAmountRemaining = invoice.totalAmount - newAmountPaid;
-      const newStatus: PaymentStatus =
-        newAmountPaid === 0
-          ? PaymentStatus.UNPAID
-          : newAmountRemaining <= 0
-            ? PaymentStatus.PAID
-            : PaymentStatus.PARTIALLY_PAID;
-
-      await tx.purchaseInvoice.update({
-        where: { id: invoice.id },
-        data: {
-          amountPaid: newAmountPaid,
-          amountRemaining: Math.max(0, newAmountRemaining),
-          paymentStatus: newStatus,
-        },
-      });
+      const invoiceId = payment.purchaseInvoiceId;
 
       // Les TreasuryEntry liées ont `onDelete: Cascade` sur supplierPaymentId
-      // donc elles disparaissent automatiquement à la suppression du paiement.
+      // donc elles disparaissent à la suppression du paiement.
       await tx.supplierPayment.delete({ where: { id } });
+
+      // Recalcul depuis la source de vérité APRÈS suppression (tient compte des
+      // avoirs : on ne regonfle plus la dette à tort — audit C1).
+      await this.recomputeInvoiceState(tx, invoiceId);
 
       return { message: 'Paiement supprimé — facture mise à jour' };
     });

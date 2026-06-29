@@ -9,6 +9,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import { MailService } from '../mail/mail.service';
 import { paginate, PaginationDto } from '../common/dto/pagination.dto';
 import { TreasuryService } from '../treasury/treasury.service';
+import { recomputeSaleInvoiceState } from '../sales/sale-invoice-state';
 
 interface CreatePaymentInput {
   saleInvoiceId: string;
@@ -88,25 +89,10 @@ export class CustomerPaymentsService {
         });
       }
 
-      const newAmountPaid = invoice.amountPaid + dto.amount;
-      const newAmountRemaining = invoice.totalAmount - newAmountPaid;
-      const newStatus =
-        newAmountRemaining <= 0
-          ? PaymentStatus.PAID
-          : newAmountPaid > 0
-            ? PaymentStatus.PARTIALLY_PAID
-            : PaymentStatus.UNPAID;
+      // Recalcul depuis la source de vérité (tient compte des avoirs — audit C1).
+      const state = await recomputeSaleInvoiceState(tx, invoice.id);
 
-      await tx.saleInvoice.update({
-        where: { id: invoice.id },
-        data: {
-          amountPaid: newAmountPaid,
-          amountRemaining: Math.max(0, newAmountRemaining),
-          paymentStatus: newStatus,
-        },
-      });
-
-      return { payment, invoice, newAmountRemaining };
+      return { payment, invoice, newAmountRemaining: state?.amountRemaining ?? 0 };
     });
 
     // Envoi email confirmation au client (hors transaction, non-bloquant)
@@ -218,26 +204,13 @@ export class CustomerPaymentsService {
     if (!payment) throw new NotFoundException('Paiement introuvable');
 
     return this.prisma.$transaction(async (tx) => {
-      const invoice = payment.saleInvoice;
-      const newAmountPaid = Math.max(0, invoice.amountPaid - payment.amount);
-      const newAmountRemaining = invoice.totalAmount - newAmountPaid;
-      const newStatus: PaymentStatus =
-        newAmountPaid === 0
-          ? PaymentStatus.UNPAID
-          : newAmountRemaining <= 0
-            ? PaymentStatus.PAID
-            : PaymentStatus.PARTIALLY_PAID;
+      const invoiceId = payment.saleInvoiceId;
 
-      await tx.saleInvoice.update({
-        where: { id: invoice.id },
-        data: {
-          amountPaid: newAmountPaid,
-          amountRemaining: Math.max(0, newAmountRemaining),
-          paymentStatus: newStatus,
-        },
-      });
-
+      // Supprime le paiement (la TreasuryEntry liée part en cascade FK), PUIS
+      // recalcule depuis la source de vérité (tient compte des avoirs — C1).
       await tx.customerPayment.delete({ where: { id } });
+      await recomputeSaleInvoiceState(tx, invoiceId);
+
       return { message: 'Paiement supprimé — facture mise à jour' };
     });
   }

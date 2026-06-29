@@ -188,11 +188,17 @@ export class AccountsService {
       where: { accountId: { in: accountIds } },
       _sum: { amount: true },
     });
+    // Set des comptes ayant AU MOINS une écriture (clé pour l'edge case ci-dessous).
+    const accountsWithEntries = new Set(sums.map((r) => r.accountId));
     sums.forEach((row) => balances.set(row.accountId, row._sum.amount ?? 0));
 
-    // Edge case : aucun mouvement et aucun OPENING_BALANCE entry → solde = openingBalance
+    // Edge case (audit M1) : on retombe sur openingBalance UNIQUEMENT si le
+    // compte n'a AUCUNE écriture. Auparavant le test `!balances.get(id)` était
+    // vrai aussi quand la somme valait EXACTEMENT 0 (ex. +X puis -X), ce qui
+    // réécrivait à tort le solde par openingBalance (déjà inclus dans la somme
+    // via l'écriture OPENING_BALANCE) → solde doublé.
     accounts.forEach((a) => {
-      if (!balances.get(a.id)) balances.set(a.id, a.openingBalance);
+      if (!accountsWithEntries.has(a.id)) balances.set(a.id, a.openingBalance);
     });
 
     return balances;
