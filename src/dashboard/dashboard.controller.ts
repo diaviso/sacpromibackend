@@ -4,6 +4,7 @@ import { UserRole } from '@prisma/client';
 import { IsDateString, IsEnum, IsOptional } from 'class-validator';
 import { DashboardService } from './dashboard.service';
 import { Roles } from '../common/decorators/roles.decorator';
+import { AnyAuthenticated } from '../common/decorators/any-authenticated.decorator';
 
 class DashboardQueryDto {
   @ApiPropertyOptional({ enum: ['today', 'week', 'month', 'custom'], default: 'month' })
@@ -56,6 +57,10 @@ export class DashboardController {
     return this.service.trends(query.period ?? '30d');
   }
 
+  // Accessible à TOUT utilisateur authentifié (override du @Roles(DIRECTOR) de
+  // la classe) : la cloche de notifications est affichée pour tous les rôles.
+  // Sans ça, les non-DIRECTOR recevaient un 403 et la cloche restait vide.
+  @AnyAuthenticated()
   @Get('alerts')
   @ApiOperation({ summary: 'Compteurs d’alertes (stocks, péremption, dettes, créances, élevage)' })
   alerts() {

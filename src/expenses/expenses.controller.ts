@@ -14,6 +14,7 @@ import { ExpenseActivity, ExpenseStatus, UserRole } from '@prisma/client';
 import { IsDateString, IsEnum, IsIn, IsInt, IsOptional, IsString, IsUUID, MaxLength, Min } from 'class-validator';
 import { ExpensesService } from './expenses.service';
 import { CreateCategoryDto, CreateExpenseDto } from './dto/create-expense.dto';
+import { UpdateExpenseDto } from './dto/update-expense.dto';
 import { PaginationDto } from '../common/dto/pagination.dto';
 import { Roles } from '../common/decorators/roles.decorator';
 import { CurrentUser, AuthenticatedUser } from '../common/decorators/current-user.decorator';
@@ -108,6 +109,19 @@ export class ExpensesController {
   @Get('expenses/:id')
   findOne(@Param('id', new ParseUUIDPipe()) id: string) {
     return this.service.findOne(id);
+  }
+
+  @Patch('expenses/:id')
+  @ApiOperation({
+    summary: 'Modifier une dépense (refusé si déjà CONFIRMED)',
+    description:
+      "Met à jour les champs d'une dépense non confirmée. Une dépense CONFIRMED a déjà généré une écriture de trésorerie : la modifier est interdit (la supprimer puis recréer).",
+  })
+  update(
+    @Param('id', new ParseUUIDPipe()) id: string,
+    @Body() dto: UpdateExpenseDto,
+  ) {
+    return this.service.update(id, dto);
   }
 
   @Patch('expenses/:id/confirm')
