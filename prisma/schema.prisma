@@ -295,6 +295,10 @@ model User {
   phone     String?
   role      UserRole
   isActive  Boolean  @default(true)
+  /// Horodatage du dernier changement de mot de passe. Tout JWT émis AVANT
+  /// cette date est rejeté par la JwtStrategy (révocation de session au
+  /// change/reset password — audit LOT 3). Null = jamais changé depuis l'ajout.
+  passwordChangedAt DateTime?
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 

@@ -183,6 +183,17 @@ export class AuthService {
       throw new UnauthorizedException('Compte inactif ou inexistant');
     }
 
+    // Révocation de session : un refresh token émis avant le dernier changement
+    // de mot de passe ne peut plus régénérer d'access token (audit LOT 3).
+    if (
+      user.passwordChangedAt &&
+      payload.iat < Math.floor(user.passwordChangedAt.getTime() / 1000)
+    ) {
+      throw new UnauthorizedException(
+        'Session expirée suite à un changement de mot de passe. Reconnectez-vous.',
+      );
+    }
+
     return this.generateTokens(user);
   }
 
@@ -274,7 +285,11 @@ export class AuthService {
     }
 
     const newHash = await bcrypt.hash(dto.newPassword, this.saltRounds);
-    await this.prisma.user.update({ where: { id: userId }, data: { password: newHash } });
+    // passwordChangedAt → invalide toutes les sessions/tokens antérieurs.
+    await this.prisma.user.update({
+      where: { id: userId },
+      data: { password: newHash, passwordChangedAt: new Date() },
+    });
 
     return { message: 'Mot de passe modifié avec succès' };
   }
@@ -354,7 +369,9 @@ export class AuthService {
     await this.prisma.$transaction([
       this.prisma.user.update({
         where: { id: record.userId },
-        data: { password: newHash },
+        // passwordChangedAt → invalide les sessions antérieures (le cas d'usage
+        // central d'un reset : couper l'accès d'un éventuel attaquant).
+        data: { password: newHash, passwordChangedAt: new Date() },
       }),
       this.prisma.passwordResetToken.update({
         where: { id: record.id },

@@ -80,11 +80,24 @@ export class JwtStrategy extends PassportStrategy(Strategy, 'jwt') {
 
     const user = await this.prisma.user.findUnique({
       where: { id: payload.sub },
-      select: { id: true, email: true, role: true, isActive: true },
+      select: { id: true, email: true, role: true, isActive: true, passwordChangedAt: true },
     });
 
     if (!user || !user.isActive) {
       throw new UnauthorizedException('Compte inactif ou inexistant');
+    }
+
+    // Révocation de session au change/reset password (audit LOT 3) : tout token
+    // émis AVANT le dernier changement de mot de passe est rejeté. Comparaison à
+    // la seconde (iat est en secondes) pour éviter de rejeter un token émis dans
+    // la même seconde que le changement.
+    if (
+      user.passwordChangedAt &&
+      payload.iat < Math.floor(user.passwordChangedAt.getTime() / 1000)
+    ) {
+      throw new UnauthorizedException(
+        'Session expirée suite à un changement de mot de passe. Reconnectez-vous.',
+      );
     }
 
     return { id: user.id, email: user.email, role: user.role };
